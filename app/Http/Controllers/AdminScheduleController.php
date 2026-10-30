@@ -5,12 +5,13 @@ namespace App\Http\Controllers;
 use App\Models\Provider;
 use App\Models\ProviderAvailability;
 use Carbon\Carbon;
+use App\Models\BookingPayment;
 use Illuminate\Http\Request;
 
 class AdminScheduleController extends Controller
 {
-    
-    private function providerId(Request $request): int
+    protected string $role = 'admin';
+    protected function providerId(Request $request): int
 {
     $user = $request->user();
 
@@ -26,19 +27,27 @@ class AdminScheduleController extends Controller
     return $provider->id;
 }
 
-    // Row sa database -> format na hinahanap ng frontend
-    private function format(ProviderAvailability $s): array
-    {
-        return [
-            'id'         => $s->id,
-            'date'       => $s->start_at->format('Y-m-d'),
-            'start_time' => $s->start_at->format('H:i'),
-            'end_time'   => $s->end_at->format('H:i'),
-            'status'     => $s->status,
-            'booked'     => 0,   // TODO: ikabit sa appointments table
-            'requested'  => 0,   // TODO: ikabit sa appointment_requests table
-        ];
-    }
+    
+    protected function format(ProviderAvailability $s): array
+{
+    
+    $base = BookingPayment::where('provider_id', $s->provider_id)
+        ->where('status', '!=', 'rejected')
+        ->whereNull('cancelled_at')
+        ->where('start_at', '>=', $s->start_at)
+        ->where('end_at', '<=', $s->end_at);
+
+    return [
+        'id'         => $s->id,
+        'date'       => $s->start_at->format('Y-m-d'),
+        'start_time' => $s->start_at->format('H:i'),
+        'end_time'   => $s->end_at->format('H:i'),
+        'status'     => $s->status,
+        'created_by' => $s->created_by_role,
+        'booked'     => (clone $base)->where('approval_status', 'approved')->count(),
+        'requested'  => (clone $base)->where('approval_status', 'pending')->count(),
+    ];
+}
 
     // GET /api/admin/schedule?month=2026-10
     public function index(Request $request)
@@ -58,16 +67,22 @@ class AdminScheduleController extends Controller
         $from = Carbon::today();
         $to   = Carbon::today()->addDays(30)->endOfDay();
 
-        $stats = [
-            'open_slots' => ProviderAvailability::where('provider_id', $providerId)
-                ->where('status', 'available')
-                ->whereBetween('start_at', [$from, $to])->count(),
-            'booked'        => 0, // TODO
-            'pending'       => 0, // TODO
-            'not_available' => ProviderAvailability::where('provider_id', $providerId)
-                ->where('status', 'unavailable')
-                ->whereBetween('start_at', [$from, $to])->count(),
-        ];
+            $stats = [
+        'open_slots' => ProviderAvailability::where('provider_id', $providerId)
+            ->where('status', 'available')
+            ->whereBetween('start_at', [$from, $to])->count(),
+        'booked' => BookingPayment::where('provider_id', $providerId)
+            ->where('status', '!=', 'rejected')
+            ->where('approval_status', 'approved')
+            ->whereBetween('start_at', [$from, $to])->count(),
+        'pending' => BookingPayment::where('provider_id', $providerId)
+            ->where('status', '!=', 'rejected')
+            ->where('approval_status', 'pending')
+            ->whereBetween('start_at', [$from, $to])->count(),
+        'not_available' => ProviderAvailability::where('provider_id', $providerId)
+            ->where('status', 'unavailable')
+            ->whereBetween('start_at', [$from, $to])->count(),
+    ];
 
         return response()->json(['slots' => $slots, 'stats' => $stats]);
     }
@@ -98,6 +113,7 @@ class AdminScheduleController extends Controller
                 'start_at'    => $data['date'] . ' 00:00:00',
                 'end_at'      => $data['date'] . ' 23:59:00',
                 'status'      => 'unavailable',
+                'created_by_role' => $this->role,
             ]);
 
             return response()->json($this->format($slot), 201);
@@ -131,6 +147,7 @@ class AdminScheduleController extends Controller
             'start_at'    => $newStart,
             'end_at'      => $newEnd,
             'status'      => 'available',
+            'created_by_role' => $this->role,
         ]);
 
         return response()->json($this->format($slot), 201);
