@@ -14,6 +14,7 @@ use App\Http\Controllers\SocialAuthController;
 use App\Http\Controllers\ConsentController;
 use App\Http\Controllers\BookingConfirmationController;
 use App\Http\Controllers\ClientAppointmentController;
+use App\Http\Controllers\DashboardController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
@@ -89,9 +90,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/appointments', [AppointmentController::class, 'index']);
         Route::post('/appointments/{id}/approve', [AppointmentController::class, 'approve']);
-        Route::post('/appointments/{id}/decline', [AppointmentController::class, 'decline']);
         Route::post('/appointments/{id}/complete', [AppointmentController::class, 'complete']);
         Route::get('/appointments/{id}/consent', [AppointmentController::class, 'consent']);
+
+        Route::get('/dashboard', [DashboardController::class, 'index']);
+    Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
     });
 
     // Affiliate: payments + appointments (walang settings)
@@ -102,9 +105,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/appointments', [AppointmentController::class, 'index']);
         Route::post('/appointments/{id}/approve', [AppointmentController::class, 'approve']);
-        Route::post('/appointments/{id}/decline', [AppointmentController::class, 'decline']);
         Route::post('/appointments/{id}/complete', [AppointmentController::class, 'complete']);
         Route::get('/appointments/{id}/consent', [AppointmentController::class, 'consent']);
+
+        Route::get('/dashboard', [DashboardController::class, 'index']);
+    Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
     });
 
     // Affiliate schedules
