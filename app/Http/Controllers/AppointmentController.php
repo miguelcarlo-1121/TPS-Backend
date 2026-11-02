@@ -6,6 +6,7 @@ use App\Models\BookingPayment;
 use App\Models\ClientProfile;
 use App\Models\ConsentForm;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 
 class AppointmentController extends Controller
@@ -38,17 +39,32 @@ class AppointmentController extends Controller
 
     // verify | pending | approved | completed | declined
     private function state(BookingPayment $p): string
-    {
-          if ($p->cancelled_at) {
-      return response()->json(['message' => 'This appointment was cancelled by the client.'], 422);
-  }
-        if ($p->status === 'to_verify') return 'verify';
-        if ($p->approval_status === 'declined') return 'declined';
-        if ($p->completed_at) return 'completed';
-        if ($p->approval_status === 'approved') return 'approved';
-        return 'pending';
-    }
+{
+    if ($p->cancelled_at)                   return 'cancelled';
+    if ($p->status === 'to_verify')         return 'verify';
+    if ($p->approval_status === 'declined') return 'declined';
+    if ($p->completed_at)                   return 'completed';
+    if ($p->approval_status === 'approved') return 'approved';
+    return 'pending';
+}
+    private function finished($q)
+{
+    return $q->where(function ($w) {
+        $w->whereNotNull('completed_at')
+          ->orWhereNotNull('cancelled_at')
+          ->orWhere('approval_status', 'declined');
+    });
+}
 
+
+private function unfinished($q)
+{
+    return $q->whereNull('completed_at')
+        ->whereNull('cancelled_at')
+        ->where(function ($w) {
+            $w->whereNull('approval_status')->orWhere('approval_status', '!=', 'declined');
+        });
+}
     // not_required (ABA/Assessment) | pending | submitted
     private function consentStatus(BookingPayment $p, $consents): string
     {
@@ -83,6 +99,8 @@ class AppointmentController extends Controller
             'amount_paid'        => $p->amount_paid,
             'balance'            => $p->balance,
             'decline_reason'     => $p->decline_reason,
+            'completed_at'       => $p->completed_at ? Carbon::parse($p->completed_at)->toIso8601String() : null,
+            'cancelled_at'       => $p->cancelled_at ? Carbon::parse($p->cancelled_at)->toIso8601String() : null,
             'consent_status'     => $this->consentStatus($p, $consents),
         ];
     }
@@ -105,12 +123,29 @@ class AppointmentController extends Controller
         return $this->format($p, $profiles, $users, $consents);
     }
 
-    // GET /api/{admin|affiliate}/appointments
     public function index(Request $request)
+{
+    $base = $this->scoped($request->user());
+
+    $rows = $this->unfinished(clone $base)
+        ->orderBy('start_at')
+        ->limit(500)
+        ->get();
+
+    [$profiles, $users, $consents] = $this->lookups($rows);
+
+    return response()->json([
+        'appointments'  => $rows->map(fn ($p) => $this->format($p, $profiles, $users, $consents))->values(),
+        'history_count' => $this->finished(clone $base)->count(),
+    ]);
+}
+
+    // GET /api/{admin|affiliate}/appointments/history  (completed, declined, cancelled)
+    public function history(Request $request)
     {
-        $rows = $this->scoped($request->user())
-            ->orderBy('start_at')
-            ->limit(500)
+        $rows = $this->finished($this->scoped($request->user()))
+            ->orderByDesc('start_at')
+            ->limit(300)
             ->get();
 
         [$profiles, $users, $consents] = $this->lookups($rows);

@@ -16,4 +16,16 @@ class SlotHold extends Model
         'end_at'     => 'datetime',
         'expires_at' => 'datetime',
     ];
+
+    
+    public function scopeActive($q)
+    {
+        return $q->where('expires_at', '>', now());
+    }
+
+   
+    public function scopeOverlapping($q, $start, $end)
+    {
+        return $q->where('start_at', '<', $end)->where('end_at', '>', $start);
+    }
 }

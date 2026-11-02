@@ -90,18 +90,13 @@ class DashboardController extends Controller
         $from = now()->startOfMonth()->subMonths(11);
 
         // ---------- Income ng buong clinic (verified payments lang) ----------
-        $incomeBase = $user->role === 'AFFILIATE'
-    ? $this->scoped($user)
-    : BookingPayment::query();
-
-$paid = $incomeBase
-    ->where('status', 'verified')
-    ->where('approval_status', '!=', 'declined')
-    ->where(function ($q) use ($from) {
-        $q->where('reviewed_at', '>=', $from)
-          ->orWhere(fn ($w) => $w->whereNull('reviewed_at')->where('created_at', '>=', $from));
-    })
-    ->get(['amount_paid', 'service_id', 'reviewed_at', 'created_at']);
+        $paid = BookingPayment::where('status', 'verified')
+            ->where('approval_status', '!=', 'declined')
+            ->where(function ($q) use ($from) {
+                $q->where('reviewed_at', '>=', $from)
+                  ->orWhere(fn ($w) => $w->whereNull('reviewed_at')->where('created_at', '>=', $from));
+            })
+            ->get(['amount_paid', 'service_id', 'reviewed_at', 'created_at']);
 
         $incomeByMonth = $paid
             ->groupBy(fn ($p) => ($p->reviewed_at ?? $p->created_at)->format('Y-m'))
@@ -119,7 +114,6 @@ $paid = $incomeBase
         $thisMonth = $paid->filter(fn ($p) => ($p->reviewed_at ?? $p->created_at)->format('Y-m') === $cur);
         $services  = [];
         foreach (self::SERVICE_NAMES as $id => $name) {
-            if ($user->role === 'AFFILIATE' && $id !== 'psychotherapy') continue;
             $rows = $thisMonth->where('service_id', $id);
             $services[] = [
                 'id'       => $id,

@@ -80,8 +80,8 @@ class BookingAvailabilityController extends Controller
             while ($cursor->copy()->addMinutes($dur)->lte($a->end_at)) {
                 $end = $cursor->copy()->addMinutes($dur);
 
-                $blocked = $holds->contains(
-        fn ($h) => $h->provider_id === $a->provider_id
+               $blocked = $holds->contains(
+        fn ($h) => (int) $h->provider_id === (int) $a->provider_id
             && $h->start_at->lt($end)
             && $h->end_at->gt($cursor)
     )
@@ -109,14 +109,20 @@ class BookingAvailabilityController extends Controller
     // GET /api/booking/availability
     public function days(Request $request)
     {
-        $data = $request->validate([
+                $data = $request->validate([
             'service'         => ['required', 'string', 'max:50'],
             'psychologist_id' => ['nullable', 'integer'],
+            'provider_id'     => ['nullable', 'integer'],
             'month'           => ['required', 'date_format:Y-m'],
         ]);
 
-        $ids   = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
-        $start = Carbon::createFromFormat('Y-m', $data['month'])->startOfMonth();
+        $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
+
+        if (!empty($data['provider_id'])) {
+            $ids = array_values(array_intersect($ids, [(int) $data['provider_id']]));
+        }
+
+        $start = Carbon::createFromFormat('!Y-m', $data['month'])->startOfMonth();
         $end   = $start->copy()->endOfMonth();
 
         $days = $this->candidates($ids, $start, $end, $this->duration($data['service']), $request->user()->id)
@@ -130,13 +136,19 @@ class BookingAvailabilityController extends Controller
     // GET /api/booking/slots
     public function slots(Request $request)
     {
-        $data = $request->validate([
+                $data = $request->validate([
             'service'         => ['required', 'string', 'max:50'],
             'psychologist_id' => ['nullable', 'integer'],
+            'provider_id'     => ['nullable', 'integer'],
             'date'            => ['required', 'date_format:Y-m-d'],
         ]);
 
-        $ids   = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
+        $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
+
+        if (!empty($data['provider_id'])) {
+            $ids = array_values(array_intersect($ids, [(int) $data['provider_id']]));
+        }
+
         $start = Carbon::parse($data['date'])->startOfDay();
         $end   = $start->copy()->endOfDay();
 
@@ -195,9 +207,10 @@ class BookingAvailabilityController extends Controller
     // POST /api/booking/hold
     public function hold(Request $request)
     {
-        $data = $request->validate([
+            $data = $request->validate([
             'service'         => ['required', 'string', 'max:50'],
             'psychologist_id' => ['nullable', 'integer'],
+            'provider_id'     => ['nullable', 'integer'],
             'date'            => ['required', 'date_format:Y-m-d'],
             'start_time'      => ['required', 'date_format:H:i'],
         ]);
@@ -210,6 +223,10 @@ class BookingAvailabilityController extends Controller
         $user = $request->user();
         $dur  = $this->duration($data['service']);
         $ids  = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
+
+        if (!empty($data['provider_id'])) {
+            $ids = array_values(array_intersect($ids, [(int) $data['provider_id']]));
+        }
 
         if (!$ids) {
             return response()->json(['message' => 'No schedule found for this selection.'], 422);

@@ -8,6 +8,7 @@ use App\Models\PaymentMethod;
 use App\Models\Provider;
 use App\Models\SlotHold;
 use App\Models\User;
+use App\Models\ProviderAvailability;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -113,8 +114,7 @@ class BookingPaymentController extends Controller
                 ? Provider::where('id', $hold->provider_id)->value('user_id')
                 : null;
 
-            $payment = BookingPayment::create([
-                'reference'            => 'TF-' . strtoupper(Str::random(8)),
+            $attrs = [
                 'user_id'              => $user->id,
                 'provider_id'          => $hold->provider_id,
                 'psychologist_user_id' => $psychUserId,
@@ -129,8 +129,40 @@ class BookingPaymentController extends Controller
                 'wallet_number'        => $data['wallet_number'],
                 'reference_number'     => $data['reference_number'],
                 'receipt_path'         => $path,
-                'status'               => 'to_verify',
-            ]);
+            ];
+
+            // Nag-bayad ulit ang parehong client para sa parehong oras? I-update ang na-reject na row.
+            $existing = BookingPayment::where('user_id', $user->id)
+                ->where('status', 'rejected')
+                ->where('provider_id', $hold->provider_id)
+                ->where('service_id', $hold->service_id)
+                ->where('start_at', $hold->start_at)
+                ->where('end_at', $hold->end_at)
+                ->latest('id')
+                ->lockForUpdate()
+                ->first();
+
+            if ($existing) {
+                if ($existing->receipt_path) {
+                    Storage::disk('public')->delete($existing->receipt_path);
+                }
+
+                $existing->forceFill($attrs + [
+                    'status'          => 'to_verify',
+                    'approval_status' => 'pending',
+                    'reviewed_by'     => null,
+                    'reviewed_at'     => null,
+                    'reject_reason'   => null,
+                    'created_at'      => now(), // lalabas ulit sa itaas bilang bago
+                ])->save();
+
+                $payment = $existing;
+            } else {
+                $payment = BookingPayment::create($attrs + [
+                    'reference' => 'TF-' . strtoupper(Str::random(8)),
+                    'status'    => 'to_verify',
+                ]);
+            }
 
             $hold->delete(); // ang booking_payments na ang naka-block sa slot
 
@@ -167,12 +199,18 @@ public function latest(Request $request)
         ? User::find($p->psychologist_user_id)
         : null;
 
+    $reviewerId = $p->status === 'rejected'
+        ? $p->reviewed_by
+        : ($p->approval_status === 'declined' ? $p->approved_by : null);
+    $reviewer = $reviewerId ? User::find($reviewerId) : null;
     return response()->json(['payment' => [
         'id'              => $p->id,
         'reference'       => $p->reference,
         'stage'           => $stage,
         'reason'          => $p->status === 'rejected' ? $p->reject_reason : $p->decline_reason,
         'rejected_by'     => $p->status === 'rejected' ? 'payment' : ($p->approval_status === 'declined' ? 'psychologist' : null),
+         'reviewer'        => $reviewer ? trim($reviewer->first_name . ' ' . $reviewer->last_name) : null,
+        'reviewer_role'   => $reviewer?->role,
         'service_id'      => $p->service_id,
         'service_name'    => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
         'psychologist'    => $psych ? trim($psych->first_name . ' ' . $psych->last_name) : null,
@@ -184,7 +222,89 @@ public function latest(Request $request)
         'balance'         => $p->balance,
     ]]);
 }
+   
+    public function retry(Request $request, $id)
+    {
+        $user = $request->user();
+        $p    = BookingPayment::where('user_id', $user->id)->findOrFail($id);
 
+        if ($p->status !== 'rejected') {
+            return response()->json(['message' => 'Only a rejected payment can be paid again.'], 422);
+        }
+        if ($p->start_at->lte(now())) {
+            return response()->json(['message' => 'That time has already passed. Please book a new schedule.'], 409);
+        }
+
+        return DB::transaction(function () use ($p, $user) {
+            Provider::where('id', $p->provider_id)->lockForUpdate()->first();
+
+            $covered = ProviderAvailability::where('provider_id', $p->provider_id)
+                ->where('status', 'available')
+                ->where('start_at', '<=', $p->start_at)
+                ->where('end_at', '>=', $p->end_at)
+                ->exists();
+
+            $taken = BookingPayment::where('provider_id', $p->provider_id)
+                ->where('id', '!=', $p->id)
+                ->whereIn('status', ['to_verify', 'verified'])
+                ->where('approval_status', '!=', 'declined')
+                ->whereNull('cancelled_at')
+                ->where('start_at', '<', $p->end_at)
+                ->where('end_at', '>', $p->start_at)
+                ->exists();
+
+            $held = SlotHold::where('provider_id', $p->provider_id)
+                ->where('user_id', '!=', $user->id)
+                ->where('expires_at', '>', now())
+                ->where('start_at', '<', $p->end_at)
+                ->where('end_at', '>', $p->start_at)
+                ->exists();
+
+            if (!$covered || $taken || $held) {
+                return response()->json([
+                    'message' => 'That time is no longer available. Please book a new schedule.',
+                ], 409);
+            }
+
+            SlotHold::where('user_id', $user->id)->delete();
+
+            $hold = SlotHold::create([
+                'provider_id' => $p->provider_id,
+                'user_id'     => $user->id,
+                'service_id'  => $p->service_id,
+                'start_at'    => $p->start_at,
+                'end_at'      => $p->end_at,
+                'expires_at'  => now()->addMinutes(60),
+            ]);
+
+            $psych = $p->psychologist_user_id ? User::find($p->psychologist_user_id) : null;
+
+            return response()->json([
+                'service_id'   => $p->service_id,
+                'previous' => [
+                    'type'             => $p->payment_type,
+                    'method_name'      => $p->method_name,
+                    'wallet_number'    => $p->wallet_number,
+                    'reference_number' => $p->reference_number,
+                    'reason'           => $p->reject_reason,
+                    'reviewer'         => ($r = $p->reviewed_by ? User::find($p->reviewed_by) : null)
+                        ? trim($r->first_name . ' ' . $r->last_name)
+                        : null,
+                ],
+                'psychologist' => $psych
+                    ? ['id' => $psych->id, 'name' => trim($psych->first_name . ' ' . $psych->last_name)]
+                    : null,
+                'hold' => [
+                    'id'          => $hold->id,
+                    'provider_id' => $hold->provider_id,
+                    'date'        => $hold->start_at->format('Y-m-d'),
+                    'start_time'  => $hold->start_at->format('H:i'),
+                    'end_time'    => $hold->end_at->format('H:i'),
+                    'expires_at'  => $hold->expires_at->toIso8601String(),
+                ],
+            ], 201);
+        });
+    }
     // ---------------------------------------------------------------
     // ADMIN / AFFILIATE
     // ---------------------------------------------------------------
@@ -242,6 +362,14 @@ public function latest(Request $request)
     public function index(Request $request)
     {
         $rows = $this->scoped($request->user())->orderByDesc('created_at')->limit(300)->get();
+                // Itago ang na-reject na payment kung may mas bago nang bayad ang parehong client para sa parehong oras
+        $rows = $rows->reject(function ($p) use ($rows) {
+            return $p->status === 'rejected'
+                && $rows->contains(fn ($o) => $o->id > $p->id
+                    && (int) $o->user_id === (int) $p->user_id
+                    && (int) $o->provider_id === (int) $p->provider_id
+                    && $o->start_at->equalTo($p->start_at));
+        })->values();
 
         $ids      = $rows->pluck('user_id')->unique();
         $profiles = ClientProfile::whereIn('user_id', $ids)->get()->keyBy('user_id');
@@ -272,7 +400,10 @@ public function latest(Request $request)
 
         $reason = null;
         if ($status === 'rejected') {
-            $reason = $request->validate(['reason' => ['nullable', 'string', 'max:255']])['reason'] ?? null;
+            $reason = $request->validate(
+                ['reason' => ['required', 'string', 'min:3', 'max:255']],
+                ['reason.required' => 'Please write or choose a message for the client.']
+            )['reason'];
         }
 
         $p->forceFill([

@@ -52,6 +52,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/booking/active', [BookingPaymentController::class, 'active']);
     Route::post('/booking/payments/{id}/finish', [BookingPaymentController::class, 'finish']);
     
+    Route::post('/booking/payments/{id}/retry', [BookingPaymentController::class, 'retry']);
     Route::get('/booking/confirmation', [BookingConfirmationController::class, 'show']);
 
     Route::get('/my-appointments', [ClientAppointmentController::class, 'index']);
@@ -92,7 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/appointments/{id}/approve', [AppointmentController::class, 'approve']);
         Route::post('/appointments/{id}/complete', [AppointmentController::class, 'complete']);
         Route::get('/appointments/{id}/consent', [AppointmentController::class, 'consent']);
-
+        Route::get('/appointments/history', [AppointmentController::class, 'history']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
     Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
     });
@@ -107,7 +108,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/appointments/{id}/approve', [AppointmentController::class, 'approve']);
         Route::post('/appointments/{id}/complete', [AppointmentController::class, 'complete']);
         Route::get('/appointments/{id}/consent', [AppointmentController::class, 'consent']);
-
+        Route::get('/appointments/history', [AppointmentController::class, 'history']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
     Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
     });

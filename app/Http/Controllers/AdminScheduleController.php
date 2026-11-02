@@ -55,7 +55,7 @@ class AdminScheduleController extends Controller
         $data = $request->validate(['month' => ['required', 'date_format:Y-m']]);
         $providerId = $this->providerId($request);
 
-        $start = Carbon::createFromFormat('Y-m', $data['month'])->startOfMonth();
+        $start = Carbon::createFromFormat('!Y-m', $data['month'])->startOfMonth();
         $end   = $start->copy()->endOfMonth();
 
         $slots = ProviderAvailability::where('provider_id', $providerId)
