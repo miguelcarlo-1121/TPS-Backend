@@ -119,4 +119,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/slots', [AffiliateScheduleController::class, 'store']);
         Route::delete('/slots/{id}', [AffiliateScheduleController::class, 'destroy']);
     });
+        // Agora Video Call Token
+    Route::post('/agora/token', [App\Http\Controllers\AgoraController::class, 'generateToken']);
 });
+
