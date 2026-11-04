@@ -30,6 +30,7 @@ Route::get('/psychologists', [PsychologistController::class, 'index']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/messages/contacts', [App\Http\Controllers\MessageController::class, 'getContacts']);
 
     // Booking: availability + temporary slot hold
     Route::get('/booking/availability', [BookingAvailabilityController::class, 'days']);
@@ -112,6 +113,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard', [DashboardController::class, 'index']);
     Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
     });
+
+    Route::get('/messages', [App\Http\Controllers\MessageController::class, 'index']);
+    Route::post('/messages', [App\Http\Controllers\MessageController::class, 'store']);
 
     // Affiliate schedules
     Route::middleware('role:AFFILIATE')->prefix('affiliate/schedule')->group(function () {
