@@ -8,6 +8,7 @@ use App\Models\ConsentForm;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 
 class BookingConfirmationController extends Controller
 {
@@ -79,9 +80,14 @@ class BookingConfirmationController extends Controller
                     'mobile' => $profile->mobile ?? $user->phone,
                 ],
                 'payment' => [
-                    'method'      => $p->method_name,
-                    'amount_paid' => (float) $p->amount_paid,
-                    'balance'     => (float) $p->balance,
+                    'method'           => $p->method_name,
+                    'reference_number' => $p->reference_number,
+                    'amount_paid'      => (float) $p->amount_paid,
+                    'balance'          => (float) $p->balance,
+                    'total_fee'        => (float) $p->total_amount,
+                    'receipt_url'      => $p->receipt_path
+                        ? Storage::disk('public')->url($p->receipt_path)
+                        : null,
                 ],
                 'consent_required' => $p->service_id === 'psychotherapy',
                 'consent_complete' => $this->consentDone($p),

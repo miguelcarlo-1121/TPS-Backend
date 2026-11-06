@@ -8,8 +8,8 @@ class ConsentForm extends Model
 {
     protected $fillable = [
         'booking_payment_id', 'user_id', 'intake', 'consent', 'dsm5',
-        'signed_name', 'signed_date', 'is_minor', 'guardian_name',
-        'guardian_relation', 'submitted_at',
+        'signed_name', 'signed_date', 'signature_data', 'is_minor', 'guardian_name',
+        'guardian_relation', 'guardian_signature_data', 'submitted_at',
     ];
 
     protected $casts = [

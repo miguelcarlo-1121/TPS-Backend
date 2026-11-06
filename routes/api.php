@@ -15,6 +15,9 @@ use App\Http\Controllers\ConsentController;
 use App\Http\Controllers\BookingConfirmationController;
 use App\Http\Controllers\ClientAppointmentController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\AdminAccountController;
+use App\Http\Controllers\AdminClientController;
+use App\Http\Controllers\HomeContentController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
@@ -26,6 +29,8 @@ Route::post('/email/verify', [SocialAuthController::class, 'verify'])->middlewar
 Route::post('/email/resend', [SocialAuthController::class, 'resend'])->middleware('throttle:3,1');
 
 Route::get('/psychologists', [PsychologistController::class, 'index']);
+Route::get('/psychologists/{id}', [PsychologistController::class, 'show']);
+Route::get('/home-content', [HomeContentController::class, 'show']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
@@ -96,7 +101,24 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/appointments/{id}/consent', [AppointmentController::class, 'consent']);
         Route::get('/appointments/history', [AppointmentController::class, 'history']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
-    Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
+        Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
+
+        // Home content management
+        Route::post('/home-content', [HomeContentController::class, 'update']);
+        Route::put('/home-content', [HomeContentController::class, 'update']);
+        Route::post('/home-content/image', [HomeContentController::class, 'uploadImage']);
+
+        // Account management
+        Route::get('/accounts', [AdminAccountController::class, 'index']);
+        Route::post('/accounts', [AdminAccountController::class, 'store']);
+        Route::put('/accounts/{id}', [AdminAccountController::class, 'update']);
+        Route::post('/accounts/{id}/status', [AdminAccountController::class, 'updateStatus']);
+        Route::delete('/accounts/{id}', [AdminAccountController::class, 'destroy']);
+
+        // Client management
+        Route::get('/clients', [AdminClientController::class, 'index']);
+        Route::get('/clients/{id}', [AdminClientController::class, 'show']);
+        Route::put('/clients/{id}', [AdminClientController::class, 'update']);
     });
 
     // Affiliate: payments + appointments (walang settings)
@@ -111,7 +133,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/appointments/{id}/consent', [AppointmentController::class, 'consent']);
         Route::get('/appointments/history', [AppointmentController::class, 'history']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
-    Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
+        Route::get('/dashboard/calendar', [DashboardController::class, 'calendar']);
     });
 
     Route::get('/messages', [App\Http\Controllers\MessageController::class, 'index']);

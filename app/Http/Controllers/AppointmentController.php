@@ -178,9 +178,11 @@ private function unfinished($q)
             'guardian'     => $c->is_minor
                 ? ['name' => $c->guardian_name, 'relation' => $c->guardian_relation]
                 : null,
-            'intake'       => $c->intake,
-            'agreements'   => $c->consent,
-            'dsm5'         => $c->dsm5,
+            'intake'                  => $c->intake,
+            'agreements'              => $c->consent,
+            'signature_data'          => $c->signature_data ?? ($c->consent['signature_data'] ?? null),
+            'guardian_signature_data' => $c->guardian_signature_data ?? ($c->consent['guardian_signature_data'] ?? null),
+            'dsm5'                    => $c->dsm5,
         ]]);
     }
 

@@ -137,11 +137,13 @@ class ConsentController extends Controller
             'dsm5'   => ['required', 'array', 'size:23'],
             'dsm5.*' => ['required', 'integer', 'between:0,4'],
 
-            'sign.name'    => $name,
-            'sign.certify' => ['accepted'],
+            'sign.name'               => $name,
+            'sign.certify'            => ['accepted'],
+            'sign.signature_data'     => ['nullable', 'string'],
 
-            'guardian.name'     => ['nullable', 'string', 'max:150'],
-            'guardian.relation' => ['nullable', 'string', 'max:60'],
+            'guardian.name'           => ['nullable', 'string', 'max:150'],
+            'guardian.relation'       => ['nullable', 'string', 'max:60'],
+            'guardian.signature_data' => ['nullable', 'string'],
         ], [
             'intake.full_name.regex' => 'Full name must not contain numbers.',
             'intake.mobile.regex'    => 'Mobile number must be 11 digits (e.g. 09123456789).',
@@ -182,15 +184,21 @@ class ConsentController extends Controller
             'intake'             => $data['intake'],
             'consent'            => array_merge(
                 array_map(fn () => true, $data['consent']),
-                ['version' => 'psychotherapy-consent-v1']
+                [
+                    'version' => 'psychotherapy-consent-v1',
+                    'signature_data' => $data['sign']['signature_data'] ?? null,
+                    'guardian_signature_data' => $data['guardian']['signature_data'] ?? null,
+                ]
             ),
-            'dsm5'               => array_map('intval', array_values($data['dsm5'])),
-            'signed_name'        => trim($data['sign']['name']),
-            'signed_date'        => now()->toDateString(),
-            'is_minor'           => $isMinor,
-            'guardian_name'      => $isMinor ? $gName : null,
-            'guardian_relation'  => $isMinor ? $gRel : null,
-            'submitted_at'       => now(),
+            'dsm5'                    => array_map('intval', array_values($data['dsm5'])),
+            'signed_name'             => trim($data['sign']['name']),
+            'signed_date'             => now()->toDateString(),
+            'signature_data'          => $data['sign']['signature_data'] ?? null,
+            'is_minor'                => $isMinor,
+            'guardian_name'           => $isMinor ? $gName : null,
+            'guardian_relation'       => $isMinor ? $gRel : null,
+            'guardian_signature_data' => $isMinor ? ($data['guardian']['signature_data'] ?? null) : null,
+            'submitted_at'            => now(),
         ]);
 
         return response()->json(['message' => 'Consent form submitted.'], 201);

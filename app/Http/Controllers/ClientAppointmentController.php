@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\ConsentForm;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class ClientAppointmentController extends Controller
 {
@@ -68,9 +69,14 @@ class ClientAppointmentController extends Controller
         'start_time'           => $p->start_at->format('H:i'),
         'end_time'             => $p->end_at->format('H:i'),
         'payment_type'         => $p->payment_type,
+        'method'               => $p->method_name,
+        'reference_number'     => $p->reference_number,
         'total_amount'         => $p->total_amount,
         'amount_paid'          => $p->amount_paid,
         'balance'              => $p->balance,
+        'receipt_url'          => $p->receipt_path
+            ? Storage::disk('public')->url($p->receipt_path)
+            : null,
         'consent_status'       => $p->service_id !== 'psychotherapy'
             ? 'not_required'
             : ($consentIds->contains($p->id) ? 'submitted' : 'pending'),
