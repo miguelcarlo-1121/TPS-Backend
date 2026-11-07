@@ -31,7 +31,7 @@ class BookingConfirmationController extends Controller
     // Consent: hinahanap ang column na nag-uugnay sa booking. Kung wala, 'false'.
     private function consentDone(BookingPayment $p): bool
     {
-        return $p->service_id === 'psychotherapy'
+        return in_array($p->service_id, ['psychotherapy', 'aba'], true)
             && ConsentForm::where('booking_payment_id', $p->id)->exists();
     }
 
@@ -57,6 +57,9 @@ class BookingConfirmationController extends Controller
             : null;
 
         $serviceName = self::SERVICE_NAMES[$p->service_id] ?? $p->service_id;
+        $serviceFullName = $p->assessment_type_name
+            ? ($serviceName . ' (' . $p->assessment_type_name . ')')
+            : $serviceName;
 
         return response()->json([
             'appointment' => [
@@ -64,9 +67,10 @@ class BookingConfirmationController extends Controller
                 'reference' => $p->reference,
                 'status'    => $this->stage($p),
                 'service'   => [
-                    'id'        => $p->service_id,
-                    'name'      => $serviceName,
-                    'full_name' => $serviceName,
+                    'id'               => $p->service_id,
+                    'name'             => $serviceName,
+                    'full_name'        => $serviceFullName,
+                    'assessment_type'  => $p->assessment_type_name,
                 ],
                 'psychologist' => $psych
                     ? ['name' => trim($psych->first_name . ' ' . $psych->last_name)]
@@ -89,7 +93,7 @@ class BookingConfirmationController extends Controller
                         ? Storage::disk('public')->url($p->receipt_path)
                         : null,
                 ],
-                'consent_required' => $p->service_id === 'psychotherapy',
+                'consent_required' => in_array($p->service_id, ['psychotherapy', 'aba'], true),
                 'consent_complete' => $this->consentDone($p),
             ],
         ]);

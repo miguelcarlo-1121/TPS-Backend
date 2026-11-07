@@ -29,10 +29,18 @@ class BookingPaymentController extends Controller
     // GET /api/booking/payment-options?service=psychotherapy
     public function options(Request $request)
     {
-        $data = $request->validate(['service' => ['required', 'string', 'max:50']]);
+        $data = $request->validate([
+            'service'            => ['required', 'string', 'max:50'],
+            'assessment_type_id' => ['nullable', 'integer'],
+        ]);
 
         $settings = DB::table('payment_settings')->first();
-        $price    = (float) DB::table('service_prices')->where('service_id', $data['service'])->value('price');
+        if ($data['service'] === 'assessment' && !empty($data['assessment_type_id'])) {
+            $typePrice = (float) DB::table('assessment_types')->where('id', $data['assessment_type_id'])->value('price');
+            $price = $typePrice > 0 ? $typePrice : (float) DB::table('service_prices')->where('service_id', 'assessment')->value('price');
+        } else {
+            $price = (float) DB::table('service_prices')->where('service_id', $data['service'])->value('price');
+        }
 
         return response()->json([
             'downpayment_allowed' => !in_array($data['service'], PaymentSettingsController::FULL_ONLY, true),
@@ -88,7 +96,13 @@ class BookingPaymentController extends Controller
                 ], 409);
             }
 
-            $price = (float) DB::table('service_prices')->where('service_id', $hold->service_id)->value('price');
+            if ($hold->service_id === 'assessment' && $hold->assessment_type_id) {
+                $typePrice = (float) DB::table('assessment_types')->where('id', $hold->assessment_type_id)->value('price');
+                $price = $typePrice > 0 ? $typePrice : (float) DB::table('service_prices')->where('service_id', $hold->service_id)->value('price');
+            } else {
+                $price = (float) DB::table('service_prices')->where('service_id', $hold->service_id)->value('price');
+            }
+
             if ($price <= 0) {
                 return response()->json(['message' => 'The price for this service is not set yet.'], 422);
             }
@@ -119,6 +133,8 @@ class BookingPaymentController extends Controller
                 'provider_id'          => $hold->provider_id,
                 'psychologist_user_id' => $psychUserId,
                 'service_id'           => $hold->service_id,
+                'assessment_type_id'   => $hold->assessment_type_id,
+                'assessment_type_name' => $hold->assessment_type_name,
                 'start_at'             => $hold->start_at,
                 'end_at'               => $hold->end_at,
                 'payment_type'         => $data['type'],
@@ -208,11 +224,16 @@ public function latest(Request $request)
         'reference'       => $p->reference,
         'stage'           => $stage,
         'reason'          => $p->status === 'rejected' ? $p->reject_reason : $p->decline_reason,
-        'rejected_by'     => $p->status === 'rejected' ? 'payment' : ($p->approval_status === 'declined' ? 'psychologist' : null),
+        'rejected_by'     => $p->status === 'rejected'
+            ? 'payment'
+            : ($p->approval_status === 'declined'
+                ? ($p->service_id === 'psychotherapy' ? 'psychologist' : 'clinic')
+                : null),
          'reviewer'        => $reviewer ? trim($reviewer->first_name . ' ' . $reviewer->last_name) : null,
         'reviewer_role'   => $reviewer?->role,
         'service_id'      => $p->service_id,
-        'service_name'    => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
+        'service_name'    => $p->assessment_type_name ? ((self::SERVICE_NAMES[$p->service_id] ?? $p->service_id) . ' (' . $p->assessment_type_name . ')') : (self::SERVICE_NAMES[$p->service_id] ?? $p->service_id),
+        'assessment_type' => $p->assessment_type_name,
         'psychologist'    => $psych ? trim($psych->first_name . ' ' . $psych->last_name) : null,
         'date'            => $p->start_at->format('Y-m-d'),
         'start_time'      => $p->start_at->format('H:i'),
@@ -340,7 +361,8 @@ public function latest(Request $request)
             'client_email'     => $profile->email ?? ($u->email ?? ''),
             'client_mobile'    => $profile->mobile ?? ($u->phone ?? ''),
             'service_id'       => $p->service_id,
-            'service_name'     => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
+            'service_name'     => $p->assessment_type_name ? ((self::SERVICE_NAMES[$p->service_id] ?? $p->service_id) . ' (' . $p->assessment_type_name . ')') : (self::SERVICE_NAMES[$p->service_id] ?? $p->service_id),
+            'assessment_type'  => $p->assessment_type_name,
             'date'             => $p->start_at->format('Y-m-d'),
             'start_time'       => $p->start_at->format('H:i'),
             'end_time'         => $p->end_at->format('H:i'),

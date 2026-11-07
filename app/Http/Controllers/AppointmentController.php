@@ -65,10 +65,10 @@ private function unfinished($q)
             $w->whereNull('approval_status')->orWhere('approval_status', '!=', 'declined');
         });
 }
-    // not_required (ABA/Assessment) | pending | submitted
+    // not_required (Assessment) | pending | submitted
     private function consentStatus(BookingPayment $p, $consents): string
     {
-        if ($p->service_id !== 'psychotherapy') return 'not_required';
+        if (!in_array($p->service_id, ['psychotherapy', 'aba'], true)) return 'not_required';
         return $consents->has($p->id) ? 'submitted' : 'pending';
     }
 
@@ -89,7 +89,8 @@ private function unfinished($q)
             'emergency_relation' => $profile->emergency_relation ?? '',
             'emergency_phone'    => $profile->emergency_phone ?? '',
             'service_id'         => $p->service_id,
-            'service_name'       => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
+            'service_name'       => $p->assessment_type_name ? ((self::SERVICE_NAMES[$p->service_id] ?? $p->service_id) . ' (' . $p->assessment_type_name . ')') : (self::SERVICE_NAMES[$p->service_id] ?? $p->service_id),
+            'assessment_type'    => $p->assessment_type_name,
             'date'               => $p->start_at->format('Y-m-d'),
             'start_time'         => $p->start_at->format('H:i'),
             'end_time'           => $p->end_at->format('H:i'),
@@ -160,7 +161,7 @@ private function unfinished($q)
     {
         $p = $this->scoped($request->user())->findOrFail($id);
 
-        if ($p->service_id !== 'psychotherapy') {
+        if (!in_array($p->service_id, ['psychotherapy', 'aba'], true)) {
             return response()->json(['message' => 'No consent form is required for this service.'], 404);
         }
 
@@ -175,7 +176,7 @@ private function unfinished($q)
             'signed_name'  => $c->signed_name,
             'signed_date'  => $c->signed_date->format('Y-m-d'),
             'is_minor'     => $c->is_minor,
-            'guardian'     => $c->is_minor
+            'guardian'     => ($c->is_minor || $p->service_id === 'aba')
                 ? ['name' => $c->guardian_name, 'relation' => $c->guardian_relation]
                 : null,
             'intake'                  => $c->intake,

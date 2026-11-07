@@ -22,13 +22,17 @@ class ProfileController extends Controller
     {
         $user = $request->user();
 
-        $data = $request->validate([
+        $rules = [
             'first_name' => 'required|string|max:100',
             'last_name'  => 'required|string|max:100',
             'phone'      => 'nullable|string|max:30',
-            // 'email' deliberately NOT here.
-            // Email changes go through /profile/email/request + /profile/email/confirm.
-        ]);
+        ];
+
+        if (in_array($user->role, ['ADMIN', 'AFFILIATE'], true)) {
+            $rules['background'] = 'nullable|string|max:5000';
+        }
+
+        $data = $request->validate($rules);
 
         $user->forceFill($data)->save();
 

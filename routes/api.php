@@ -17,7 +17,10 @@ use App\Http\Controllers\ClientAppointmentController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AdminAccountController;
 use App\Http\Controllers\AdminClientController;
+use App\Http\Controllers\AssessmentTypeController;
 use App\Http\Controllers\HomeContentController;
+use App\Http\Controllers\ServiceController;
+use App\Http\Controllers\AboutController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
@@ -31,6 +34,12 @@ Route::post('/email/resend', [SocialAuthController::class, 'resend'])->middlewar
 Route::get('/psychologists', [PsychologistController::class, 'index']);
 Route::get('/psychologists/{id}', [PsychologistController::class, 'show']);
 Route::get('/home-content', [HomeContentController::class, 'show']);
+Route::get('/about/team', [AboutController::class, 'team']); 
+// Public: services list (prices included, only enabled ones)
+Route::get('/services', [ServiceController::class, 'index']);
+
+// Public: assessment sub-types (for booking flow)
+Route::get('/assessment-types', [AssessmentTypeController::class, 'index']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
@@ -107,6 +116,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/home-content', [HomeContentController::class, 'update']);
         Route::put('/home-content', [HomeContentController::class, 'update']);
         Route::post('/home-content/image', [HomeContentController::class, 'uploadImage']);
+        Route::get('/about-team', [AboutController::class, 'adminTeam']);
+        // Services management (descriptions, hours, visibility)
+        Route::get('/services', [ServiceController::class, 'adminIndex']);
+        Route::post('/services', [ServiceController::class, 'store']);
+        Route::put('/services/{slug}', [ServiceController::class, 'adminUpdate']);
+        Route::post('/services/{slug}/image', [ServiceController::class, 'uploadImage']);
+        Route::delete('/services/{slug}/image', [ServiceController::class, 'deleteImage']);
+        Route::delete('/services/{slug}', [ServiceController::class, 'destroy']);
+
+        // Assessment sub-types management
+        Route::get('/assessment-types', [AssessmentTypeController::class, 'adminIndex']);
+        Route::post('/assessment-types', [AssessmentTypeController::class, 'store']);
+        Route::put('/assessment-types/{id}', [AssessmentTypeController::class, 'update']);
+        Route::delete('/assessment-types/{id}', [AssessmentTypeController::class, 'destroy']);
 
         // Account management
         Route::get('/accounts', [AdminAccountController::class, 'index']);
@@ -148,4 +171,3 @@ Route::middleware('auth:sanctum')->group(function () {
         // Agora Video Call Token
     Route::post('/agora/token', [App\Http\Controllers\AgoraController::class, 'generateToken']);
 });
-

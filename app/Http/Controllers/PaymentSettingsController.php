@@ -10,24 +10,61 @@ use Illuminate\Support\Str;
 
 class PaymentSettingsController extends Controller
 {
-    private const SERVICES = ['psychotherapy', 'aba', 'assessment'];
     public const FULL_ONLY = ['aba'];
+
     // GET /api/admin/payment-settings
     public function show()
     {
         $settings = DB::table('payment_settings')->first();
-        $prices   = DB::table('service_prices')->pluck('price', 'service_id');
+        $storedPrices = DB::table('service_prices')->pluck('price', 'service_id');
 
-        $out = [];
-        foreach (self::SERVICES as $s) {
-            $out[$s] = (float) ($prices[$s] ?? 0);
+        // All services except assessment (assessment pricing is per assessment type)
+        $services = DB::table('services')
+            ->where('slug', '!=', 'assessment')
+            ->orderBy('id')
+            ->get();
+
+        $serviceList = [];
+        $pricesOut = [];
+        foreach ($services as $s) {
+            $p = (float) ($storedPrices[$s->slug] ?? 0);
+            $serviceList[] = [
+                'id'    => $s->slug,
+                'name'  => $s->name,
+                'price' => $p,
+            ];
+            $pricesOut[$s->slug] = $p;
+        }
+
+        // Assessment types
+        $assessmentTypes = DB::table('assessment_types')
+            ->orderBy('sort')
+            ->orderBy('id')
+            ->get()
+            ->map(fn($t) => [
+                'id'               => $t->id,
+                'name'             => $t->name,
+                'price'            => (float) $t->price,
+                'duration_minutes' => (int) $t->duration_minutes,
+                'hours'            => round($t->duration_minutes / 60, 1),
+                'enabled'          => (bool) $t->enabled,
+            ])
+            ->values()
+            ->all();
+
+        $assessmentPricesOut = [];
+        foreach ($assessmentTypes as $at) {
+            $assessmentPricesOut[(string) $at['id']] = $at['price'];
         }
 
         return response()->json([
             'downpayment_percent' => (int) ($settings->downpayment_percent ?? 50),
             'note'                => $settings->note ?? '',
-            'prices'              => $out,
-            'full_only'           => self::FULL_ONLY, 
+            'services'            => $serviceList,
+            'prices'              => $pricesOut,
+            'assessment_types'    => $assessmentTypes,
+            'assessment_prices'   => $assessmentPricesOut,
+            'full_only'           => self::FULL_ONLY,
             'methods'             => PaymentMethod::orderBy('sort')->orderBy('id')->get()
                 ->map(fn ($m) => $m->toArrayPublic())->values(),
         ]);
@@ -36,16 +73,13 @@ class PaymentSettingsController extends Controller
     // PUT /api/admin/payment-settings
     public function update(Request $request)
     {
-        $rules = [
+        $data = $request->validate([
             'downpayment_percent' => ['required', 'integer', 'min:1', 'max:100'],
             'note'                => ['nullable', 'string', 'max:500'],
-            'prices'              => ['required', 'array'],
-        ];
-        foreach (self::SERVICES as $s) {
-            $rules["prices.$s"] = ['required', 'numeric', 'min:1', 'max:1000000'];
-        }
-        $data = $request->validate($rules, [
-            'prices.*.min' => 'Price must be at least 1.',
+            'prices'              => ['nullable', 'array'],
+            'prices.*'            => ['numeric', 'min:0', 'max:1000000'],
+            'assessment_prices'   => ['nullable', 'array'],
+            'assessment_prices.*' => ['numeric', 'min:0', 'max:1000000'],
         ]);
 
         $now = now();
@@ -61,15 +95,32 @@ class PaymentSettingsController extends Controller
             DB::table('payment_settings')->insert([
                 'downpayment_percent' => $data['downpayment_percent'],
                 'note'                => $data['note'] ?? null,
-                'created_at' => $now, 'updated_at' => $now,
+                'created_at'          => $now,
+                'updated_at'          => $now,
             ]);
         }
 
-        foreach (self::SERVICES as $s) {
-            DB::table('service_prices')->updateOrInsert(
-                ['service_id' => $s],
-                ['price' => $data['prices'][$s], 'updated_at' => $now, 'created_at' => $now]
-            );
+        // Save service prices
+        if (!empty($data['prices'])) {
+            foreach ($data['prices'] as $serviceSlug => $priceVal) {
+                if ($serviceSlug === 'assessment') continue; // assessment price is not stored as single service price
+                DB::table('service_prices')->updateOrInsert(
+                    ['service_id' => $serviceSlug],
+                    ['price' => (float) $priceVal, 'updated_at' => $now, 'created_at' => $now]
+                );
+            }
+        }
+
+        // Save assessment type prices
+        if (!empty($data['assessment_prices'])) {
+            foreach ($data['assessment_prices'] as $typeId => $priceVal) {
+                DB::table('assessment_types')
+                    ->where('id', (int) $typeId)
+                    ->update([
+                        'price'      => (float) $priceVal,
+                        'updated_at' => $now,
+                    ]);
+            }
         }
 
         return $this->show();

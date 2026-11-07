@@ -22,8 +22,20 @@ class BookingAvailabilityController extends Controller
     private const DEFAULT_DURATION = 60;
     private const HOLD_MINUTES = 60;
 
-    private function duration(string $service): int
+    private function duration(string $service, ?int $assessmentTypeId = null): int
     {
+        if ($service === 'assessment' && $assessmentTypeId) {
+            $type = DB::table('assessment_types')->find($assessmentTypeId);
+            if ($type && $type->duration_minutes > 0) {
+                return (int) $type->duration_minutes;
+            }
+        }
+
+        $s = DB::table('services')->where('slug', $service)->first();
+        if ($s && $s->duration_minutes > 0) {
+            return (int) $s->duration_minutes;
+        }
+
         return self::DURATIONS[$service] ?? self::DEFAULT_DURATION;
     }
 
@@ -109,11 +121,12 @@ class BookingAvailabilityController extends Controller
     // GET /api/booking/availability
     public function days(Request $request)
     {
-                $data = $request->validate([
-            'service'         => ['required', 'string', 'max:50'],
-            'psychologist_id' => ['nullable', 'integer'],
-            'provider_id'     => ['nullable', 'integer'],
-            'month'           => ['required', 'date_format:Y-m'],
+        $data = $request->validate([
+            'service'            => ['required', 'string', 'max:50'],
+            'psychologist_id'    => ['nullable', 'integer'],
+            'provider_id'        => ['nullable', 'integer'],
+            'assessment_type_id' => ['nullable', 'integer'],
+            'month'              => ['required', 'date_format:Y-m'],
         ]);
 
         $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
@@ -124,8 +137,9 @@ class BookingAvailabilityController extends Controller
 
         $start = Carbon::createFromFormat('!Y-m', $data['month'])->startOfMonth();
         $end   = $start->copy()->endOfMonth();
+        $dur   = $this->duration($data['service'], $data['assessment_type_id'] ?? null);
 
-        $days = $this->candidates($ids, $start, $end, $this->duration($data['service']), $request->user()->id)
+        $days = $this->candidates($ids, $start, $end, $dur, $request->user()->id)
             ->map(fn ($c) => $c['start']->format('Y-m-d'))
             ->unique()
             ->values();
@@ -136,11 +150,12 @@ class BookingAvailabilityController extends Controller
     // GET /api/booking/slots
     public function slots(Request $request)
     {
-                $data = $request->validate([
-            'service'         => ['required', 'string', 'max:50'],
-            'psychologist_id' => ['nullable', 'integer'],
-            'provider_id'     => ['nullable', 'integer'],
-            'date'            => ['required', 'date_format:Y-m-d'],
+        $data = $request->validate([
+            'service'            => ['required', 'string', 'max:50'],
+            'psychologist_id'    => ['nullable', 'integer'],
+            'provider_id'        => ['nullable', 'integer'],
+            'assessment_type_id' => ['nullable', 'integer'],
+            'date'               => ['required', 'date_format:Y-m-d'],
         ]);
 
         $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
@@ -151,8 +166,9 @@ class BookingAvailabilityController extends Controller
 
         $start = Carbon::parse($data['date'])->startOfDay();
         $end   = $start->copy()->endOfDay();
+        $dur   = $this->duration($data['service'], $data['assessment_type_id'] ?? null);
 
-        $slots = $this->candidates($ids, $start, $end, $this->duration($data['service']), $request->user()->id)
+        $slots = $this->candidates($ids, $start, $end, $dur, $request->user()->id)
             ->sortBy(fn ($c) => $c['start']->timestamp)
             ->unique(fn ($c) => $c['start']->format('H:i'))
             ->map(fn ($c) => [
@@ -207,12 +223,13 @@ class BookingAvailabilityController extends Controller
     // POST /api/booking/hold
     public function hold(Request $request)
     {
-            $data = $request->validate([
-            'service'         => ['required', 'string', 'max:50'],
-            'psychologist_id' => ['nullable', 'integer'],
-            'provider_id'     => ['nullable', 'integer'],
-            'date'            => ['required', 'date_format:Y-m-d'],
-            'start_time'      => ['required', 'date_format:H:i'],
+        $data = $request->validate([
+            'service'            => ['required', 'string', 'max:50'],
+            'psychologist_id'    => ['nullable', 'integer'],
+            'provider_id'        => ['nullable', 'integer'],
+            'assessment_type_id' => ['nullable', 'integer'],
+            'date'               => ['required', 'date_format:Y-m-d'],
+            'start_time'         => ['required', 'date_format:H:i'],
         ]);
 
         // Psychotherapy: kailangan na ng psychologist bago mag-hold
@@ -220,8 +237,13 @@ class BookingAvailabilityController extends Controller
             return response()->json(['message' => 'Please choose a psychologist first.'], 422);
         }
 
+        $assessmentType = null;
+        if ($data['service'] === 'assessment' && !empty($data['assessment_type_id'])) {
+            $assessmentType = DB::table('assessment_types')->find($data['assessment_type_id']);
+        }
+
         $user = $request->user();
-        $dur  = $this->duration($data['service']);
+        $dur  = $this->duration($data['service'], $data['assessment_type_id'] ?? null);
         $ids  = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
 
         if (!empty($data['provider_id'])) {
@@ -235,7 +257,7 @@ class BookingAvailabilityController extends Controller
         $dayStart = Carbon::parse($data['date'])->startOfDay();
         $dayEnd   = $dayStart->copy()->endOfDay();
 
-        return DB::transaction(function () use ($data, $user, $dur, $ids, $dayStart, $dayEnd) {
+        return DB::transaction(function () use ($data, $user, $dur, $ids, $dayStart, $dayEnd, $assessmentType) {
             Provider::whereIn('id', $ids)->lockForUpdate()->get();
 
             $match = $this->candidates($ids, $dayStart, $dayEnd, $dur, $user->id)
@@ -250,22 +272,26 @@ class BookingAvailabilityController extends Controller
             SlotHold::where('user_id', $user->id)->delete();
 
             $hold = SlotHold::create([
-                'provider_id' => $match['provider_id'],
-                'user_id'     => $user->id,
-                'service_id'  => $data['service'],
-                'start_at'    => $match['start'],
-                'end_at'      => $match['end'],
-                'expires_at'  => now()->addMinutes(self::HOLD_MINUTES),
+                'provider_id'          => $match['provider_id'],
+                'user_id'              => $user->id,
+                'service_id'           => $data['service'],
+                'assessment_type_id'   => $assessmentType ? $assessmentType->id : null,
+                'assessment_type_name' => $assessmentType ? $assessmentType->name : null,
+                'start_at'             => $match['start'],
+                'end_at'               => $match['end'],
+                'expires_at'           => now()->addMinutes(self::HOLD_MINUTES),
             ]);
 
             return response()->json([
                 'hold' => [
-                    'id'          => $hold->id,
-                    'provider_id' => $hold->provider_id,
-                    'date'        => $hold->start_at->format('Y-m-d'),
-                    'start_time'  => $hold->start_at->format('H:i'),
-                    'end_time'    => $hold->end_at->format('H:i'),
-                    'expires_at'  => $hold->expires_at->toIso8601String(),
+                    'id'                   => $hold->id,
+                    'provider_id'          => $hold->provider_id,
+                    'assessment_type_id'   => $hold->assessment_type_id,
+                    'assessment_type_name' => $hold->assessment_type_name,
+                    'date'                 => $hold->start_at->format('Y-m-d'),
+                    'start_time'           => $hold->start_at->format('H:i'),
+                    'end_time'             => $hold->end_at->format('H:i'),
+                    'expires_at'           => $hold->expires_at->toIso8601String(),
                 ],
             ], 201);
         });

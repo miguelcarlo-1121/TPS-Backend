@@ -8,6 +8,7 @@ class SlotHold extends Model
 {
     protected $fillable = [
         'provider_id', 'user_id', 'service_id',
+        'assessment_type_id', 'assessment_type_name',
         'start_at', 'end_at', 'expires_at',
     ];
 

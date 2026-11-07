@@ -61,7 +61,8 @@ class ClientAppointmentController extends Controller
         'tab'                  => $this->tab($p),
         'label'                => $this->label($p),
         'service_id'           => $p->service_id,
-        'service_name'         => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
+        'service_name'         => $p->assessment_type_name ? ((self::SERVICE_NAMES[$p->service_id] ?? $p->service_id) . ' (' . $p->assessment_type_name . ')') : (self::SERVICE_NAMES[$p->service_id] ?? $p->service_id),
+        'assessment_type'      => $p->assessment_type_name,
         'provider_id'          => $p->provider_id,
         'psychologist_user_id' => $p->psychologist_user_id,
         'psychologist'         => $psych ? trim($psych->first_name . ' ' . $psych->last_name) : null,
@@ -77,7 +78,7 @@ class ClientAppointmentController extends Controller
         'receipt_url'          => $p->receipt_path
             ? Storage::disk('public')->url($p->receipt_path)
             : null,
-        'consent_status'       => $p->service_id !== 'psychotherapy'
+        'consent_status'       => !in_array($p->service_id, ['psychotherapy', 'aba'], true)
             ? 'not_required'
             : ($consentIds->contains($p->id) ? 'submitted' : 'pending'),
         'reschedule_count'     => $p->reschedule_count,

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "104db79af8b9aaff9e3f4839890d4462",
+    "content-hash": "123e744305493f761ef5963bf962e54e",
     "packages": [
         {
             "name": "brick/math",
@@ -3560,6 +3560,123 @@
                 "source": "https://github.com/pusher/pusher-http-php/tree/7.3.0"
             },
             "time": "2026-08-07T12:47:11+00:00"
+        },
+        {
+            "name": "queents/console-helpers",
+            "version": "v1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/queents/console-helpers.git",
+                "reference": "dfac645afebea1eaca5609f325d0cb62f2a9ac43"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/queents/console-helpers/zipball/dfac645afebea1eaca5609f325d0cb62f2a9ac43",
+                "reference": "dfac645afebea1eaca5609f325d0cb62f2a9ac43",
+                "shasum": ""
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "providers": [
+                        "Queents\\ConsoleHelpers\\ConsoleHelpersServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Queents\\ConsoleHelpers\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Fady Mondy",
+                    "email": "EngFadyMondy@gmail.com"
+                }
+            ],
+            "description": "tons of helper you need for you artisan command line application",
+            "keywords": [
+                "application",
+                "artisan",
+                "command",
+                "console",
+                "helpers",
+                "line"
+            ],
+            "support": {
+                "issues": "https://github.com/queents/console-helpers/issues",
+                "source": "https://github.com/queents/console-helpers/tree/v1.0.0"
+            },
+            "funding": [
+                {
+                    "url": "https://github.com/3x1io",
+                    "type": "github"
+                }
+            ],
+            "time": "2023-01-24T18:25:51+00:00"
+        },
+        {
+            "name": "queents/laravel-agora",
+            "version": "v1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/queents/laravel-agora.git",
+                "reference": "44a81a0c0544c134c5812af0d14bafa9d1545046"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/queents/laravel-agora/zipball/44a81a0c0544c134c5812af0d14bafa9d1545046",
+                "reference": "44a81a0c0544c134c5812af0d14bafa9d1545046",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.0.2",
+                "queents/console-helpers": "^1.0"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "providers": [
+                        "Queents\\LaravelAgora\\LaravelAgoraServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Queents\\LaravelAgora\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Fady Mondy",
+                    "email": "info@3x1.io"
+                }
+            ],
+            "description": "Agora Token Generator With easy to use Service Class",
+            "keywords": [
+                "laravel",
+                "php",
+                "template"
+            ],
+            "support": {
+                "issues": "https://github.com/queents/laravel-agora/issues",
+                "source": "https://github.com/queents/laravel-agora/tree/v1.0.0"
+            },
+            "funding": [
+                {
+                    "url": "https://github.com/3x1io",
+                    "type": "github"
+                }
+            ],
+            "time": "2023-01-31T14:52:07+00:00"
         },
         {
             "name": "ralouphie/getallheaders",
@@ -9528,5 +9645,5 @@
         "php": "^8.2"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.6.0"
 }

@@ -53,7 +53,7 @@ class ConsentController extends Controller
                 'reference'    => $p->reference,
                 'service_id'   => $p->service_id,
                 'service_name' => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
-                'required'     => $p->service_id === 'psychotherapy',
+                'required'     => in_array($p->service_id, ['psychotherapy', 'aba'], true),
                 'approved'     => $this->approved($p),
                 'submitted'    => (bool) $done,
                 'submitted_at' => $done?->submitted_at?->toIso8601String(),
@@ -84,8 +84,8 @@ class ConsentController extends Controller
         if (!$p) {
             return response()->json(['message' => 'No booking found.'], 404);
         }
-        if ($p->service_id !== 'psychotherapy') {
-            return response()->json(['message' => 'The consent form is only for Psychotherapy.'], 422);
+        if (!in_array($p->service_id, ['psychotherapy', 'aba'], true)) {
+            return response()->json(['message' => 'The consent form is only required for Psychotherapy and ABA Therapy.'], 422);
         }
         if (!$this->approved($p)) {
             return response()->json(['message' => 'Your appointment is not approved yet.'], 422);
@@ -98,64 +98,93 @@ class ConsentController extends Controller
         $rel  = ['required', 'string', 'min:2', 'max:60', 'regex:' . self::NAME_RE];
         $tel  = ['required', 'regex:' . self::PHONE_RE];
 
-        $data = $request->validate([
-            'intake.full_name'      => $name,
-            'intake.nickname'       => ['nullable', 'string', 'max:60'],
-            'intake.gender'         => ['nullable', 'string', 'max:60'],
-            'intake.civil_status'   => ['nullable', 'string', 'max:30'],
-            'intake.birthdate'      => ['required', 'date_format:Y-m-d', 'before_or_equal:today', 'after:1899-12-31'],
-            'intake.address'        => ['required', 'string', 'min:5', 'max:255'],
-            'intake.mobile'         => $tel,
-            'intake.email'          => ['required', 'email', 'max:190'],
-            'intake.occupation'     => ['nullable', 'string', 'max:120'],
-            'intake.heard_about'    => ['nullable', 'string', 'max:190'],
+        if ($p->service_id === 'aba') {
+            $data = $request->validate([
+                'intake.full_name'             => $name,
+                'intake.birthdate'             => ['required', 'date_format:Y-m-d', 'before_or_equal:today', 'after:1899-12-31'],
+                'intake.guardian_names'        => ['required', 'string', 'min:2', 'max:300'],
+                'intake.provider_name'         => ['required', 'string', 'max:190'],
+                'intake.guardian_printed_name' => $name,
+                'intake.guardian_relation'     => $rel,
 
-            'intake.emergency'              => ['required', 'array', 'min:1', 'max:2'],
-            'intake.emergency.*.name'       => $name,
-            'intake.emergency.*.relation'   => $rel,
-            'intake.emergency.*.mobile'     => $tel,
+                'consent.agreement'       => ['accepted'],
+                'consent.media_recording' => ['required', 'boolean'],
+                'consent.telehealth'      => ['required', 'boolean'],
 
-            'intake.reason'         => ['required', 'string', 'min:5', 'max:2000'],
-            'intake.duration_unit'  => ['required', 'in:days,weeks,months,years'],
-            'intake.goals'          => ['required', 'string', 'min:3', 'max:2000'],
+                'sign.name'           => $name,
+                'sign.certify'        => ['accepted'],
+                'sign.signature_data' => ['required', 'string', 'max:2000000'],
 
-            'intake.prev_therapy'          => ['required', 'boolean'],
-            'intake.prev_therapy_details'  => ['nullable', 'string', 'max:500'],
-            'intake.diagnosed'             => ['required', 'boolean'],
-            'intake.diagnosed_details'     => ['nullable', 'string', 'max:500'],
-            'intake.medications'           => ['required', 'boolean'],
-            'intake.medications_details'   => ['nullable', 'string', 'max:500'],
-            'intake.medical'               => ['required', 'boolean'],
-            'intake.medical_details'       => ['nullable', 'string', 'max:500'],
+                'guardian.name'           => $name,
+                'guardian.relation'       => $rel,
+                'guardian.signature_data' => ['required', 'string', 'max:2000000'],
+            ], [
+                'intake.full_name.regex' => 'Full name must not contain numbers.',
+                'sign.name.regex'        => 'Printed name must not contain numbers.',
+            ]);
+            $data['dsm5'] = [];
+        } else {
+            $data = $request->validate([
+                'intake.full_name'      => $name,
+                'intake.nickname'       => ['nullable', 'string', 'max:60'],
+                'intake.gender'         => ['nullable', 'string', 'max:60'],
+                'intake.civil_status'   => ['nullable', 'string', 'max:30'],
+                'intake.birthdate'      => ['required', 'date_format:Y-m-d', 'before_or_equal:today', 'after:1899-12-31'],
+                'intake.address'        => ['required', 'string', 'min:5', 'max:255'],
+                'intake.mobile'         => $tel,
+                'intake.email'          => ['required', 'email', 'max:190'],
+                'intake.occupation'     => ['nullable', 'string', 'max:120'],
+                'intake.heard_about'    => ['nullable', 'string', 'max:190'],
 
-            'consent.read'            => ['accepted'],
-            'consent.confidentiality' => ['accepted'],
-            'consent.crisis'          => ['accepted'],
-            'consent.fees'            => ['accepted'],
-            'consent.privacy'         => ['accepted'],
+                'intake.emergency'              => ['required', 'array', 'min:1', 'max:2'],
+                'intake.emergency.*.name'       => $name,
+                'intake.emergency.*.relation'   => $rel,
+                'intake.emergency.*.mobile'     => $tel,
 
-            'dsm5'   => ['required', 'array', 'size:23'],
-            'dsm5.*' => ['required', 'integer', 'between:0,4'],
+                'intake.reason'         => ['required', 'string', 'min:5', 'max:2000'],
+                'intake.duration_unit'  => ['required', 'in:days,weeks,months,years'],
+                'intake.goals'          => ['required', 'string', 'min:3', 'max:2000'],
 
-            'sign.name'               => $name,
-            'sign.certify'            => ['accepted'],
-            'sign.signature_data'     => ['nullable', 'string'],
+                'intake.prev_therapy'          => ['required', 'boolean'],
+                'intake.prev_therapy_details'  => ['nullable', 'string', 'max:500'],
+                'intake.diagnosed'             => ['required', 'boolean'],
+                'intake.diagnosed_details'     => ['nullable', 'string', 'max:500'],
+                'intake.medications'           => ['required', 'boolean'],
+                'intake.medications_details'   => ['nullable', 'string', 'max:500'],
+                'intake.medical'               => ['required', 'boolean'],
+                'intake.medical_details'       => ['nullable', 'string', 'max:500'],
 
-            'guardian.name'           => ['nullable', 'string', 'max:150'],
-            'guardian.relation'       => ['nullable', 'string', 'max:60'],
-            'guardian.signature_data' => ['nullable', 'string'],
-        ], [
-            'intake.full_name.regex' => 'Full name must not contain numbers.',
-            'intake.mobile.regex'    => 'Mobile number must be 11 digits (e.g. 09123456789).',
-            'sign.name.regex'        => 'Signature name must not contain numbers.',
-            'dsm5.size'              => 'Please answer all 23 symptom questions.',
-        ]);
+                'consent.read'            => ['accepted'],
+                'consent.confidentiality' => ['accepted'],
+                'consent.crisis'          => ['accepted'],
+                'consent.fees'            => ['accepted'],
+                'consent.privacy'         => ['accepted'],
+
+                'dsm5'   => ['required', 'array', 'size:23'],
+                'dsm5.*' => ['required', 'integer', 'between:0,4'],
+
+                'sign.name'               => $name,
+                'sign.certify'            => ['accepted'],
+                'sign.signature_data'     => ['nullable', 'string'],
+
+                'guardian.name'           => ['nullable', 'string', 'max:150'],
+                'guardian.relation'       => ['nullable', 'string', 'max:60'],
+                'guardian.signature_data' => ['nullable', 'string'],
+            ], [
+                'intake.full_name.regex' => 'Full name must not contain numbers.',
+                'intake.mobile.regex'    => 'Mobile number must be 11 digits (e.g. 09123456789).',
+                'sign.name.regex'        => 'Signature name must not contain numbers.',
+                'dsm5.size'              => 'Please answer all 23 symptom questions.',
+            ]);
+        }
 
         // "Yes" na walang detalye
         $errors = [];
-        foreach (['prev_therapy', 'diagnosed', 'medications', 'medical'] as $k) {
-            if (!empty($data['intake'][$k]) && trim((string) ($data['intake'][$k . '_details'] ?? '')) === '') {
-                $errors["intake.{$k}_details"] = 'Please add the details.';
+        if ($p->service_id === 'psychotherapy') {
+            foreach (['prev_therapy', 'diagnosed', 'medications', 'medical'] as $k) {
+                if (!empty($data['intake'][$k]) && trim((string) ($data['intake'][$k . '_details'] ?? '')) === '') {
+                    $errors["intake.{$k}_details"] = 'Please add the details.';
+                }
             }
         }
 
@@ -164,10 +193,12 @@ class ConsentController extends Controller
         $isMinor = $age < 18;
         $gName   = trim((string) ($data['guardian']['name'] ?? ''));
         $gRel    = trim((string) ($data['guardian']['relation'] ?? ''));
+        $guardianRequired = $p->service_id === 'aba' || $isMinor;
 
-        if ($isMinor) {
+        if ($guardianRequired) {
             if (!preg_match(self::NAME_RE, $gName)) $errors['guardian.name'] = 'Parent / guardian name is required.';
-            if (!preg_match(self::NAME_RE, $gRel))  $errors['guardian.relation'] = 'Relationship to the minor is required.';
+            if (!preg_match(self::NAME_RE, $gRel))  $errors['guardian.relation'] = 'Relationship to the client is required.';
+            if (empty($data['guardian']['signature_data'])) $errors['guardian.signature_data'] = 'Parent / guardian signature is required.';
         }
 
         if ($errors) {
@@ -176,28 +207,29 @@ class ConsentController extends Controller
 
         $data['intake']['age'] = $age;
         $data['intake']['full_name'] = trim($data['intake']['full_name']);
-        $data['intake']['email']     = strtolower(trim($data['intake']['email']));
+        if (isset($data['intake']['email'])) {
+            $data['intake']['email'] = strtolower(trim($data['intake']['email']));
+        }
+        $consentData = $p->service_id === 'aba'
+            ? $data['consent']
+            : array_map(fn () => true, $data['consent']);
+        $consentData['version'] = $p->service_id === 'aba' ? 'aba-consent-v1' : 'psychotherapy-consent-v1';
+        $consentData['signature_data'] = $data['sign']['signature_data'] ?? null;
+        $consentData['guardian_signature_data'] = $data['guardian']['signature_data'] ?? null;
 
         ConsentForm::create([
             'booking_payment_id' => $p->id,
             'user_id'            => $user->id,
             'intake'             => $data['intake'],
-            'consent'            => array_merge(
-                array_map(fn () => true, $data['consent']),
-                [
-                    'version' => 'psychotherapy-consent-v1',
-                    'signature_data' => $data['sign']['signature_data'] ?? null,
-                    'guardian_signature_data' => $data['guardian']['signature_data'] ?? null,
-                ]
-            ),
+            'consent'            => $consentData,
             'dsm5'                    => array_map('intval', array_values($data['dsm5'])),
             'signed_name'             => trim($data['sign']['name']),
             'signed_date'             => now()->toDateString(),
             'signature_data'          => $data['sign']['signature_data'] ?? null,
             'is_minor'                => $isMinor,
-            'guardian_name'           => $isMinor ? $gName : null,
-            'guardian_relation'       => $isMinor ? $gRel : null,
-            'guardian_signature_data' => $isMinor ? ($data['guardian']['signature_data'] ?? null) : null,
+            'guardian_name'           => $guardianRequired ? $gName : null,
+            'guardian_relation'       => $guardianRequired ? $gRel : null,
+            'guardian_signature_data' => $guardianRequired ? ($data['guardian']['signature_data'] ?? null) : null,
             'submitted_at'            => now(),
         ]);
 

@@ -42,21 +42,6 @@ class HomeContentController extends Controller
             'services.*.title'   => 'required|string|max:120',
             'services.*.text'    => 'required|string|max:1000',
 
-            'team'               => 'required|array|min:1|max:8',
-            'team.*.id'          => 'nullable|string|max:60',
-            'team.*.name'        => 'required|string|max:120',
-            'team.*.role'        => 'required|string|max:120',
-            'team.*.focus'       => 'nullable|string|max:120',
-            'team.*.quote'       => 'nullable|string|max:300',
-            'team.*.bio'         => 'required|string|max:1500',
-            'team.*.tags'        => 'nullable|array|max:8',
-            'team.*.tags.*'      => 'string|max:40',
-
-            'stories'            => 'required|array|min:1|max:8',
-            'stories.*.id'       => 'nullable|string|max:60',
-            'stories.*.who'      => 'required|string|max:40',
-            'stories.*.text'     => 'required|string|max:1000',
-
             'faqs'               => 'required|array|min:1|max:12',
             'faqs.*.id'          => 'nullable|string|max:60',
             'faqs.*.q'           => 'required|string|max:200',
@@ -68,7 +53,26 @@ class HomeContentController extends Controller
             'contact.facebook'      => 'nullable|url|max:255',
             'contact.facebookLabel' => 'nullable|string|max:120',
             'contact.hours'         => 'nullable|string|max:200',
+
+            // About page: headline, intro, at ang listahan ng tao (title, show/hide, order)
+            'about'                      => 'nullable|array',
+            'about.headline'             => 'nullable|string|max:160',
+            'about.intro'                => 'nullable|string|max:800',
+            'about.members'              => 'nullable|array|max:50',
+            'about.members.*.user_id'    => 'required|integer|exists:users,id',
+            'about.members.*.title'      => 'nullable|string|max:80',
+            'about.members.*.visible'    => 'required|boolean',
         ]);
+
+        $row = HomeContent::where('key', 'home')->first();
+
+        // Kung walang ipinadalang "about" (hal. hindi nakapag-load), huwag burahin ang naka-save na
+        if (!isset($data['about'])) {
+            $existing = data_get($row?->content, 'about');
+            if ($existing) {
+                $data['about'] = $existing;
+            }
+        }
 
         // $data ay validated fields lang, kaya natatanggal ang kung anu-anong dagdag sa request
         $row = HomeContent::updateOrCreate(

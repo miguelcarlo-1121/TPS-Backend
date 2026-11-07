@@ -8,6 +8,7 @@ class BookingPayment extends Model
 {
     protected $fillable = [
         'reference', 'user_id', 'provider_id', 'psychologist_user_id', 'service_id',
+        'assessment_type_id', 'assessment_type_name',
         'start_at', 'end_at', 'payment_type', 'total_amount', 'amount_paid', 'balance',
         'method_name', 'wallet_number', 'reference_number', 'receipt_path',
         'status', 'reviewed_by', 'reviewed_at', 'reject_reason',
