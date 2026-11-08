@@ -59,6 +59,8 @@ class PaymentSettingsController extends Controller
 
         return response()->json([
             'downpayment_percent' => (int) ($settings->downpayment_percent ?? 50),
+            'psychotherapy_downpayment_amount' => (float) ($settings->psychotherapy_downpayment_amount ?? 750),
+            'assessment_downpayment_amount' => (float) ($settings->assessment_downpayment_amount ?? 750),
             'note'                => $settings->note ?? '',
             'services'            => $serviceList,
             'prices'              => $pricesOut,
@@ -75,6 +77,8 @@ class PaymentSettingsController extends Controller
     {
         $data = $request->validate([
             'downpayment_percent' => ['required', 'integer', 'min:1', 'max:100'],
+            'psychotherapy_downpayment_amount' => ['required', 'numeric', 'min:1', 'max:1000000'],
+            'assessment_downpayment_amount' => ['required', 'numeric', 'min:1', 'max:1000000'],
             'note'                => ['nullable', 'string', 'max:500'],
             'prices'              => ['nullable', 'array'],
             'prices.*'            => ['numeric', 'min:0', 'max:1000000'],
@@ -82,18 +86,33 @@ class PaymentSettingsController extends Controller
             'assessment_prices.*' => ['numeric', 'min:0', 'max:1000000'],
         ]);
 
+        $psychotherapyPrice = (float) (
+            $data['prices']['psychotherapy']
+            ?? DB::table('service_prices')->where('service_id', 'psychotherapy')->value('price')
+            ?? 0
+        );
+        if ($data['psychotherapy_downpayment_amount'] >= $psychotherapyPrice) {
+            return response()->json([
+                'message' => 'Psychotherapy downpayment must be less than the session fee.',
+            ], 422);
+        }
+
         $now = now();
         $row = DB::table('payment_settings')->first();
 
         if ($row) {
             DB::table('payment_settings')->where('id', $row->id)->update([
                 'downpayment_percent' => $data['downpayment_percent'],
+                'psychotherapy_downpayment_amount' => $data['psychotherapy_downpayment_amount'],
+                'assessment_downpayment_amount' => $data['assessment_downpayment_amount'],
                 'note'                => $data['note'] ?? null,
                 'updated_at'          => $now,
             ]);
         } else {
             DB::table('payment_settings')->insert([
                 'downpayment_percent' => $data['downpayment_percent'],
+                'psychotherapy_downpayment_amount' => $data['psychotherapy_downpayment_amount'],
+                'assessment_downpayment_amount' => $data['assessment_downpayment_amount'],
                 'note'                => $data['note'] ?? null,
                 'created_at'          => $now,
                 'updated_at'          => $now,

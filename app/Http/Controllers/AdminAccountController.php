@@ -12,7 +12,7 @@ class AdminAccountController extends Controller
     /**
      * GET /api/admin/accounts
      * Query params:
-     *  - role: "All" | "Client" | "Psychologist" | "Affiliate" | "Admin"
+     *  - role: "All" | "Client" | "Affiliate" | "Admin"
      *  - q: search term (name, email, phone)
      *  - page: int
      *  - per_page: int (default 10)
@@ -20,15 +20,16 @@ class AdminAccountController extends Controller
     public function index(Request $request)
     {
         $query = User::query();
+        $roleCounts = User::query()
+            ->selectRaw('role, COUNT(*) as count')
+            ->whereIn('role', ['CLIENT', 'AFFILIATE', 'ADMIN'])
+            ->groupBy('role')
+            ->pluck('count', 'role');
 
         $role = $request->input('role', 'All');
         if ($role && strtolower($role) !== 'all') {
             $upper = strtoupper($role);
-            if ($upper === 'PSYCHOLOGIST') {
-                $query->whereIn('role', ['AFFILIATE', 'ADMIN']);
-            } else {
-                $query->where('role', $upper);
-            }
+            $query->where('role', $upper);
         }
 
         if ($q = trim((string) $request->input('q', ''))) {
@@ -72,6 +73,12 @@ class AdminAccountController extends Controller
                 'last_page'    => $paginator->lastPage(),
                 'total'        => $paginator->total(),
                 'per_page'     => $paginator->perPage(),
+            ],
+            'role_counts' => [
+                'All'       => (int) $roleCounts->sum(),
+                'Client'    => (int) ($roleCounts['CLIENT'] ?? 0),
+                'Affiliate' => (int) ($roleCounts['AFFILIATE'] ?? 0),
+                'Admin'     => (int) ($roleCounts['ADMIN'] ?? 0),
             ],
         ]);
     }

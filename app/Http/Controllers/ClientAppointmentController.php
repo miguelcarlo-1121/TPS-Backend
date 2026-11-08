@@ -51,6 +51,11 @@ class ClientAppointmentController extends Controller
         return $this->tab($p) === 'upcoming' && $p->start_at->isFuture();
     }
 
+    private function canCancel(BookingPayment $p): bool
+    {
+        return $this->canChange($p) && !$p->start_at->isToday();
+    }
+
     private function format(BookingPayment $p, $psychs, $consentIds): array
 {
     $psych = $p->psychologist_user_id ? ($psychs[$p->psychologist_user_id] ?? null) : null;
@@ -84,7 +89,7 @@ class ClientAppointmentController extends Controller
         'reschedule_count'     => $p->reschedule_count,
         'cancel_reason'        => $p->cancel_reason,
         'can_reschedule'       => $this->canChange($p),
-        'can_cancel'           => $this->canChange($p),
+        'can_cancel'           => $this->canCancel($p),
     ];
 }
 
@@ -102,6 +107,13 @@ private function consentLookup($rows)
     public function index(Request $request)
     {
         $rows = BookingPayment::where('user_id', $request->user()->id)
+            ->where(function ($query) {
+                $query->where('approval_status', 'approved')
+                    ->orWhere('status', 'rejected')
+                    ->orWhere('approval_status', 'declined')
+                    ->orWhereNotNull('cancelled_at')
+                    ->orWhere('end_at', '<=', now());
+            })
             ->orderByDesc('start_at')
             ->limit(200)
             ->get();
@@ -124,7 +136,7 @@ private function consentLookup($rows)
             $p = BookingPayment::where('user_id', $request->user()->id)
                 ->lockForUpdate()->findOrFail($id);
 
-            if (!$this->canChange($p)) {
+            if (!$this->canCancel($p)) {
                 return response()->json(['message' => 'This appointment can no longer be cancelled.'], 422);
             }
 

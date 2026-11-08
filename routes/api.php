@@ -69,7 +69,8 @@ Route::middleware('auth:sanctum')->group(function () {
     
     Route::post('/booking/payments/{id}/retry', [BookingPaymentController::class, 'retry']);
     Route::get('/booking/confirmation', [BookingConfirmationController::class, 'show']);
-
+    Route::get('/booking/balance/{id}', [BookingPaymentController::class, 'balanceShow']);
+    Route::post('/booking/balance/{id}', [BookingPaymentController::class, 'balanceSubmit'])->middleware('throttle:10,1');
     Route::get('/my-appointments', [ClientAppointmentController::class, 'index']);
     Route::post('/my-appointments/{id}/cancel', [ClientAppointmentController::class, 'cancel']);
     Route::post('/my-appointments/{id}/reschedule', [ClientAppointmentController::class, 'reschedule'])->middleware('throttle:10,1');
@@ -103,7 +104,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/payments', [BookingPaymentController::class, 'index']);
         Route::post('/payments/{id}/verify', [BookingPaymentController::class, 'verify']);
         Route::post('/payments/{id}/reject', [BookingPaymentController::class, 'reject']);
-
+        Route::post('/payments/{id}/balance/verify', [BookingPaymentController::class, 'balanceVerify']);
+        Route::post('/payments/{id}/balance/reject', [BookingPaymentController::class, 'balanceReject']);
         Route::get('/appointments', [AppointmentController::class, 'index']);
         Route::post('/appointments/{id}/approve', [AppointmentController::class, 'approve']);
         Route::post('/appointments/{id}/complete', [AppointmentController::class, 'complete']);
@@ -149,7 +151,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/payments', [BookingPaymentController::class, 'index']);
         Route::post('/payments/{id}/verify', [BookingPaymentController::class, 'verify']);
         Route::post('/payments/{id}/reject', [BookingPaymentController::class, 'reject']);
-
+        Route::post('/payments/{id}/balance/verify', [BookingPaymentController::class, 'balanceVerify']);
+        Route::post('/payments/{id}/balance/reject', [BookingPaymentController::class, 'balanceReject']);
         Route::get('/appointments', [AppointmentController::class, 'index']);
         Route::post('/appointments/{id}/approve', [AppointmentController::class, 'approve']);
         Route::post('/appointments/{id}/complete', [AppointmentController::class, 'complete']);

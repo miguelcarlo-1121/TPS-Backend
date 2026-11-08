@@ -17,7 +17,7 @@ class ServiceController extends Controller
     // ---------------------------------------------------------------
 
     /** Return one service row joined with its current price. */
-    private function row(object $s, float $price, float $downpayment_percent, array $full_only): array
+    private function row(object $s, float $price, float $downpayment_percent, float $psychotherapy_downpayment_amount, array $full_only): array
     {
         $slug = $s->slug ?? null;
 
@@ -35,6 +35,7 @@ class ServiceController extends Controller
             'enabled'             => (bool) $s->enabled,
             'price'               => $slug === 'assessment' ? 0.0 : $price,
             'downpayment_percent' => in_array($slug, $full_only) ? 100 : $downpayment_percent,
+            'downpayment_amount'  => $slug === 'psychotherapy' ? $psychotherapy_downpayment_amount : null,
             'full_only'           => in_array($slug, $full_only),
             'is_custom'           => !in_array($slug, self::SLUGS, true),
         ];
@@ -52,6 +53,8 @@ class ServiceController extends Controller
 
         $settings = DB::table('payment_settings')->first();
         $downpct  = (int) ($settings->downpayment_percent ?? 50);
+        $psychotherapyDownpayment = (float) ($settings->psychotherapy_downpayment_amount ?? 750);
+        $assessmentDownpayment = (float) ($settings->assessment_downpayment_amount ?? 750);
 
         $full_only = \App\Http\Controllers\PaymentSettingsController::FULL_ONLY;
 
@@ -65,6 +68,9 @@ class ServiceController extends Controller
                 'name'             => $t->name,
                 'description'      => $t->description ?? '',
                 'price'            => (float) $t->price,
+                'downpayment_amount' => $assessmentDownpayment > 0 && $assessmentDownpayment < (float) $t->price
+                    ? $assessmentDownpayment
+                    : null,
                 'duration_minutes' => (int) $t->duration_minutes,
                 'hours'            => round($t->duration_minutes / 60, 1),
             ])
@@ -76,7 +82,7 @@ class ServiceController extends Controller
         foreach (self::SLUGS as $slug) {
             $s = $services->firstWhere('slug', $slug);
             if (!$s) continue;
-            $row = $this->row($s, (float)($prices[$slug] ?? 0), $downpct, $full_only);
+            $row = $this->row($s, (float)($prices[$slug] ?? 0), $downpct, $psychotherapyDownpayment, $full_only);
             if ($slug === 'assessment') {
                 $row['assessment_types'] = $assessmentTypes;
             }
@@ -86,7 +92,7 @@ class ServiceController extends Controller
         // Then custom services
         foreach ($services as $s) {
             if (in_array($s->slug, self::SLUGS, true)) continue;
-            $rows[] = $this->row($s, (float)($prices[$s->slug] ?? 0), $downpct, $full_only);
+            $rows[] = $this->row($s, (float)($prices[$s->slug] ?? 0), $downpct, $psychotherapyDownpayment, $full_only);
         }
 
         return $rows;
