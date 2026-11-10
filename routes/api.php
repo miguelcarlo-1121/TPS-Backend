@@ -52,6 +52,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/booking/hold', [BookingAvailabilityController::class, 'hold']);
     Route::delete('/booking/hold/{id}', [BookingAvailabilityController::class, 'release']);
     Route::get('/booking/psychologists', [BookingAvailabilityController::class, 'psychologistsForSlot']);
+    Route::get('/booking/recommendations', [BookingAvailabilityController::class, 'recommendations']);
 
     Route::get('/booking/client-info', [ClientInfoController::class, 'show']);
     Route::post('/booking/client-info', [ClientInfoController::class, 'store']);

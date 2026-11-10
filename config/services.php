@@ -46,4 +46,19 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Scheduling Engine (Python FastAPI)
+    |--------------------------------------------------------------------------
+    |
+    | SCHEDULING_ENGINE_URL  — base URL of the running FastAPI service,
+    |                          e.g. http://localhost:8001
+    | SCHEDULING_ENGINE_TOKEN — must match SERVICE_TOKEN in scheduling-engine/.env
+    |
+    */
+    'scheduling_engine' => [
+        'url'   => env('SCHEDULING_ENGINE_URL', 'http://localhost:8001'),
+        'token' => env('SCHEDULING_ENGINE_TOKEN', ''),
+    ],
+
 ];

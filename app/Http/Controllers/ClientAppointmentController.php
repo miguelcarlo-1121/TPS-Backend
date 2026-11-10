@@ -6,8 +6,10 @@ use App\Models\BookingPayment;
 use App\Models\SlotHold;
 use App\Models\User;
 use App\Models\ConsentForm;
+use App\Services\SchedulingEngineService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class ClientAppointmentController extends Controller
@@ -106,6 +108,8 @@ private function consentLookup($rows)
     // GET /api/my-appointments
     public function index(Request $request)
     {
+        BookingPayment::completeEnded();
+
         $rows = BookingPayment::where('user_id', $request->user()->id)
             ->where(function ($query) {
                 $query->where('approval_status', 'approved')
@@ -182,6 +186,32 @@ private function consentLookup($rows)
             if ($p->service_id === 'psychotherapy' && (int) $hold->provider_id !== (int) $p->provider_id) {
                 return response()->json(['message' => 'Please choose a time with the same psychologist.'], 422);
             }
+
+            // --- Scheduling-engine double-check for the NEW slot ---
+            $engineResult = app(SchedulingEngineService::class)->solve(
+                serviceSlug:      $hold->service_id,
+                date:             \Carbon\Carbon::parse($hold->start_at)->format('Y-m-d'),
+                startTime:        \Carbon\Carbon::parse($hold->start_at)->format('H:i'),
+                endTime:          \Carbon\Carbon::parse($hold->end_at)->format('H:i'),
+                providerId:       $hold->provider_id,
+                excludeBookingId: $p->id,  // exclude the current booking being rescheduled
+                userId:           $user->id, // needed for Stage 2 history recommendations
+            );
+
+            if ($engineResult !== null && SchedulingEngineService::isNotFeasible($engineResult)) {
+                $recs = SchedulingEngineService::allRecommendations($engineResult);
+                Log::info('ClientAppointmentController@reschedule: engine flagged NOT_FEASIBLE', [
+                    'booking_payment_id' => $p->id,
+                    'hold_id'            => $hold->id,
+                    'user_id'            => $user->id,
+                    'recs_count'         => count($recs),
+                ]);
+                return response()->json([
+                    'message'         => 'That time was just taken or is no longer available. Please pick another.',
+                    'recommendations' => $recs,
+                ], 409);
+            }
+            // -------------------------------------------------------
 
             $p->forceFill([
                 'original_start_at' => $p->original_start_at ?? $p->start_at,

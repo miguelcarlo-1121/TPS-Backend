@@ -7,20 +7,23 @@ use App\Models\ProviderAvailability;
 use App\Models\SlotHold;
 use App\Models\User;
 use App\Models\BookingPayment;
+use App\Services\SchedulingEngineService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class BookingAvailabilityController extends Controller
 {
     private const DURATIONS = [
         'psychotherapy' => 60,
-        'aba'           => 60,
+        'aba'           => 120,
         'assessment'    => 60,
     ];
     private const DEFAULT_DURATION = 60;
     private const HOLD_MINUTES = 60;
+    private const SLOT_INTERVAL_MINUTES = 30;
 
     private function duration(string $service, ?int $assessmentTypeId = null): int
     {
@@ -87,7 +90,15 @@ class BookingAvailabilityController extends Controller
         $out = collect();
 
         foreach ($avail as $a) {
-            $cursor = $a->start_at->copy();
+            // Laging 30-minute boundary ang start (9:00, 9:30, ...) kahit hindi aligned ang availability
+            $cursor = $a->start_at->copy()->startOfMinute();
+            if ($cursor->lt($a->start_at)) {
+                $cursor->addMinute();
+            }
+            $mod = $cursor->minute % self::SLOT_INTERVAL_MINUTES;
+            if ($mod !== 0) {
+                $cursor->addMinutes(self::SLOT_INTERVAL_MINUTES - $mod);
+            }
 
             while ($cursor->copy()->addMinutes($dur)->lte($a->end_at)) {
                 $end = $cursor->copy()->addMinutes($dur);
@@ -111,7 +122,7 @@ class BookingAvailabilityController extends Controller
                     ]);
                 }
 
-                $cursor = $end;
+                $cursor->addMinutes(self::SLOT_INTERVAL_MINUTES);
             }
         }
 
@@ -269,10 +280,76 @@ class BookingAvailabilityController extends Controller
                 ], 409);
             }
 
+            // --- Scheduling-engine double-check (async advisory) ---
+            $matchProvider = Provider::find($match['provider_id']);
+            $engineResult  = app(SchedulingEngineService::class)->solve(
+                serviceSlug: $data['service'],
+                date:        $data['date'],
+                startTime:   $data['start_time'],
+                endTime:     $match['end']->format('H:i'),
+                providerId:  $match['provider_id'],
+                userId:      $user->id,
+            );
+
+            if ($engineResult !== null && SchedulingEngineService::isNotFeasible($engineResult)) {
+                // Engine explicitly flagged a conflict — surface recommendations to the client.
+                // Keep only slots that are still free in Laravel (engine does not know other clients' holds).
+                $recs = $this->bookableRecommendations(
+                    SchedulingEngineService::allRecommendations($engineResult),
+                    $ids,
+                    $dur,
+                    $user->id,
+                    $data['service'] === 'psychotherapy',
+                );
+                Log::info('BookingAvailabilityController@hold: engine flagged NOT_FEASIBLE', [
+                    'user_id'    => $user->id,
+                    'service'    => $data['service'],
+                    'date'       => $data['date'],
+                    'start_time' => $data['start_time'],
+                    'recs_count' => count($recs),
+                ]);
+                return response()->json([
+                    'message'         => 'That time was just taken or is no longer available. Please pick another.',
+                    'recommendations' => $recs,
+                ], 409);
+            }
+            // If engine is unreachable ($engineResult === null) or returns FEASIBLE, proceed normally.
+            // -------------------------------------------------------
+
+            // --- ABA / Assessment: ang Admin na pinili ng ILP ang gagamitin (isa lang) ---
+            $holdProviderId = $match['provider_id'];
+
+            if ($data['service'] !== 'psychotherapy' && SchedulingEngineService::isFeasible($engineResult)) {
+                $assigned = SchedulingEngineService::assignedAdminProviderId($engineResult);
+
+                if ($assigned !== null && $assigned !== (int) $holdProviderId
+                    && in_array($assigned, array_map('intval', $ids), true)) {
+                    // Hindi alam ng engine ang holds ng ibang client, kaya tiyaking libre pa talaga
+                    // ang napiling Admin sa oras na ito bago gamitin.
+                    $free = $this->candidates([$assigned], $dayStart, $dayEnd, $dur, $user->id)
+                        ->contains(fn ($c) => $c['start']->format('H:i') === $data['start_time']);
+
+                    if ($free) {
+                        $holdProviderId = $assigned;
+                    } else {
+                        Log::warning('BookingAvailabilityController@hold: ILP admin has a conflicting hold, using first free admin', [
+                            'ilp_admin' => $assigned,
+                            'fallback'  => $holdProviderId,
+                        ]);
+                    }
+                }
+
+                if (SchedulingEngineService::reassignments($engineResult)) {
+                    Log::warning('BookingAvailabilityController@hold: ILP proposed reassignments (not applied)', [
+                        'reassignments' => SchedulingEngineService::reassignments($engineResult),
+                    ]);
+                }
+            }
+
             SlotHold::where('user_id', $user->id)->delete();
 
             $hold = SlotHold::create([
-                'provider_id'          => $match['provider_id'],
+                'provider_id'          => $holdProviderId,
                 'user_id'              => $user->id,
                 'service_id'           => $data['service'],
                 'assessment_type_id'   => $assessmentType ? $assessmentType->id : null,
@@ -293,8 +370,121 @@ class BookingAvailabilityController extends Controller
                     'end_time'             => $hold->end_at->format('H:i'),
                     'expires_at'           => $hold->expires_at->toIso8601String(),
                 ],
+                'engine_feasible' => SchedulingEngineService::isFeasible($engineResult),
             ], 201);
         });
+    }
+
+    // GET /api/booking/recommendations?service=..&date=YYYY-MM-DD[&start_time=HH:MM][&psychologist_id=..][&assessment_type_id=..]
+    // History-based na mungkahing oras (Stage 2 ng engine).
+    //  - may start_time: ang oras na iyon ang sinusuri; kung hindi feasible, ibabalik ang alternatives.
+    //  - walang start_time: ang "usual" na oras ng client (galing sa huling completed session) ang sinusuri.
+    public function recommendations(Request $request)
+    {
+        $data = $request->validate([
+            'service'            => ['required', 'string', 'max:50'],
+            'psychologist_id'    => ['nullable', 'integer'],
+            'provider_id'        => ['nullable', 'integer'],
+            'assessment_type_id' => ['nullable', 'integer'],
+            'date'               => ['required', 'date_format:Y-m-d'],
+            'start_time'         => ['nullable', 'date_format:H:i'],
+        ]);
+
+        $none = fn (?string $reason = null) => response()->json(['recommendations' => [], 'reason' => $reason]);
+
+        $user   = $request->user();
+        $engine = app(SchedulingEngineService::class);
+
+        $history = $engine->buildHistory($data['service'], $user->id);
+        if (!$history) {
+            return $none('NO_HISTORY');
+        }
+
+        $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
+        if (!empty($data['provider_id'])) {
+            $ids = array_values(array_intersect($ids, [(int) $data['provider_id']]));
+        }
+        if (!$ids) {
+            return $none('NO_PROVIDER');
+        }
+
+        $isPsycho   = $data['service'] === 'psychotherapy';
+        $providerId = $isPsycho ? (int) $ids[0] : null;
+        if ($isPsycho && empty($data['psychologist_id'])) {
+            return $none('NO_PSYCHOLOGIST');
+        }
+
+        $startTime = $data['start_time'] ?? $history['start'];
+        $dur       = $this->duration($data['service'], $data['assessment_type_id'] ?? null);
+        $start     = Carbon::parse($data['date'] . ' ' . $startTime);
+        $end       = $start->copy()->addMinutes($dur);
+
+        if ($start->lte(now()) || $start->minute % self::SLOT_INTERVAL_MINUTES !== 0) {
+            return $none('UNAVAILABLE_TIME');
+        }
+
+        $result = $engine->solve(
+            serviceSlug: $data['service'],
+            date:        $data['date'],
+            startTime:   $start->format('H:i'),
+            endTime:     $end->format('H:i'),
+            providerId:  $providerId,
+            userId:      $user->id,
+        );
+
+        if ($result === null) {
+            return $none('ENGINE_UNAVAILABLE');
+        }
+
+        if (SchedulingEngineService::isNotFeasible($result)) {
+            $recs = SchedulingEngineService::allRecommendations($result);
+        } elseif (SchedulingEngineService::isFeasible($result)) {
+            // Bakante ang "usual" na oras sa petsang ito -> ito mismo ang mungkahi.
+            $recs = [[
+                'rank'        => 1,
+                'tier'        => ($start->dayOfWeekIso === $history['weekday'] && $startTime === $history['start'])
+                    ? 'HISTORY_MATCH' : 'HISTORY_NEAR',
+                'provider_id' => null,
+                'date'        => $start->format('Y-m-d'),
+                'start'       => $start->format('H:i'),
+                'end'         => $end->format('H:i'),
+                'status'      => 'RECOMMENDATION_FOUND',
+            ]];
+            // Kung ang oras na ito ay hindi mismo ang usual ng client (may start_time na ipinasa), walang mungkahi.
+            if (!empty($data['start_time']) && $startTime !== $history['start']) {
+                $recs = [];
+            }
+        } else {
+            // Hindi COMPLETED: gamitin ang tunay na dahilan (invalid code / job_status).
+            // Huwag gamitin ang `reason` ng engine dito: maaaring "NO_HISTORY" iyon kahit hindi iyon ang totoong dahilan.
+            return $none($result['invalid'][0]['code'] ?? ($result['job_status'] ?? 'ENGINE_ERROR'));
+        }
+
+        $recs = $this->bookableRecommendations($recs, $ids, $dur, $user->id, $isPsycho);
+
+        return response()->json(['recommendations' => $recs, 'reason' => $recs ? null : 'NO_ALTERNATIVE']);
+    }
+
+    /**
+     * Keep engine recommendations that are still free in Laravel, and hide Admin IDs for ABA/Assessment.
+     */
+    private function bookableRecommendations(array $recs, array $ids, int $dur, int $userId, bool $isPsycho): array
+    {
+        $recs = array_values(array_filter($recs, function ($r) use ($ids, $dur, $userId) {
+            if (empty($r['date']) || empty($r['start'])) {
+                return false;
+            }
+            $ds = Carbon::parse($r['date'])->startOfDay();
+            return $this->candidates($ids, $ds, $ds->copy()->endOfDay(), $dur, $userId)
+                ->contains(fn ($c) => $c['start']->format('H:i') === $r['start']);
+        }));
+
+        return array_map(function ($r) use ($isPsycho) {
+            if (!$isPsycho) {
+                $r['provider_id'] = null;
+            }
+            return $r;
+        }, $recs);
     }
 
     // DELETE /api/booking/hold/{id}

@@ -9,9 +9,11 @@ use App\Models\Provider;
 use App\Models\SlotHold;
 use App\Models\User;
 use App\Models\ProviderAvailability;
+use App\Services\SchedulingEngineService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -309,6 +311,31 @@ class BookingPaymentController extends Controller
                 ], 409);
             }
 
+            // --- Scheduling-engine double-check ---
+            $engineResult = app(SchedulingEngineService::class)->solve(
+                serviceSlug:      $p->service_id,
+                date:             Carbon::parse($p->start_at)->format('Y-m-d'),
+                startTime:        Carbon::parse($p->start_at)->format('H:i'),
+                endTime:          Carbon::parse($p->end_at)->format('H:i'),
+                providerId:       $p->provider_id,
+                excludeBookingId: $p->id,  // exclude this rejected booking from active_bookings
+                userId:           $user->id,
+            );
+
+            if ($engineResult !== null && SchedulingEngineService::isNotFeasible($engineResult)) {
+                $recs = SchedulingEngineService::allRecommendations($engineResult);
+                Log::info('BookingPaymentController@retry: engine flagged NOT_FEASIBLE', [
+                    'payment_id' => $p->id,
+                    'user_id'    => $user->id,
+                    'recs_count' => count($recs),
+                ]);
+                return response()->json([
+                    'message'         => 'That time is no longer available. Please book a new schedule.',
+                    'recommendations' => $recs,
+                ], 409);
+            }
+            // -------------------------------------------------------
+
             SlotHold::where('user_id', $user->id)->delete();
 
             $hold = SlotHold::create([
@@ -345,6 +372,7 @@ class BookingPaymentController extends Controller
                     'end_time'    => $hold->end_at->format('H:i'),
                     'expires_at'  => $hold->expires_at->toIso8601String(),
                 ],
+                'engine_feasible' => SchedulingEngineService::isFeasible($engineResult),
             ], 201);
         });
     }
@@ -495,7 +523,7 @@ class BookingPaymentController extends Controller
 
     /**
      * Psychotherapy: makikita lang ng psychologist na pinili.
-     * ABA / Assessment: makikita ng lahat ng ADMIN.
+     * ABA / Assessment: makikita lang ng ADMIN na naka-assign (provider_id).
      */
     private function scoped(User $user)
     {
@@ -506,9 +534,18 @@ class BookingPaymentController extends Controller
                 ->where('psychologist_user_id', $user->id);
         }
 
-        return $q->where(function ($w) use ($user) {
-            $w->where('service_id', '!=', 'psychotherapy')
-              ->orWhere('psychologist_user_id', $user->id);
+        // ADMIN: psychotherapy na sila ang pinili, at ABA/Assessment na naka-assign
+        // sa KANYANG provider_id lang. Hindi na makikita ang appointment ng ibang Admin.
+        $providerId = Provider::where('user_id', $user->id)->value('id');
+
+        return $q->where(function ($w) use ($user, $providerId) {
+            $w->where(function ($x) use ($user) {
+                $x->where('service_id', 'psychotherapy')
+                  ->where('psychologist_user_id', $user->id);
+            })->orWhere(function ($x) use ($providerId) {
+                $x->where('service_id', '!=', 'psychotherapy')
+                  ->where('provider_id', $providerId ?? 0);
+            });
         });
     }
 

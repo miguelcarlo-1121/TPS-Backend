@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 
 class BookingPayment extends Model
 {
@@ -25,4 +26,23 @@ class BookingPayment extends Model
         'completed_at' => 'datetime',
         'flow_done_at' => 'datetime',
     ];
+
+    /**
+     * I-mark na completed (completed_at = end_at) ang lahat ng APPROVED na appointment
+     * na lumipas na ang oras sa Asia/Manila. Idempotent: ligtas tawagin kahit ilang beses.
+     * Returns: bilang ng na-update.
+     */
+    public static function completeEnded(): int
+    {
+        // Booking times are stored as Asia/Manila wall clock; compare against Manila "now"
+        // even if APP_TIMEZONE was left at UTC.
+        $nowManila = now('Asia/Manila')->format('Y-m-d H:i:s');
+
+        return static::query()
+            ->where('approval_status', 'approved')
+            ->whereNull('completed_at')
+            ->whereNull('cancelled_at')
+            ->where('end_at', '<=', $nowManila)
+            ->update(['completed_at' => DB::raw('end_at')]);
+    }
 }

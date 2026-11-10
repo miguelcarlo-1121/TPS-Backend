@@ -27,3 +27,7 @@ Thumbs.db
 __pycache__/
 .pytest_cache/
 *.pyc
+scheduling-engine/.venv/
+scheduling-engine/.env
+scheduling-engine/**/__pycache__/
+scheduling-engine/.pytest_cache/

@@ -1,0 +1,44 @@
+{
+  "schema_version": "2.0",
+  "job_id": "job_20261014_0002",
+  "run_at": "2026-10-14T08:00:00+08:00",
+  "config": {
+    "horizon_days": 7,
+    "slot_minutes": 30,
+    "max_recommendations": 3,
+    "max_candidate_checks": 500,
+    "time_limit_ms": 2000,
+    "mip_gap": 0.0,
+    "max_bookings": 500
+  },
+  "providers": [
+    {
+      "provider_id": "A1",
+      "role": "ADMIN_PSYCHOLOGIST",
+      "eligible_services": ["PC", "ABA", "AC"],
+      "availability": [{ "date": "2026-10-14", "start": "09:00", "end": "17:00" }]
+    },
+    {
+      "provider_id": "A2",
+      "role": "ADMIN_PSYCHOLOGIST",
+      "eligible_services": ["PC", "ABA", "AC"],
+      "availability": [{ "date": "2026-10-14", "start": "09:00", "end": "17:00" }]
+    }
+  ],
+  "active_bookings": [
+    {
+      "booking_id": "bk_0001", "service": "PC", "date": "2026-10-14",
+      "start": "09:00", "end": "10:00",
+      "pinned_provider_id": "A1", "assigned_admin_id": null, "status": "PAID"
+    },
+    {
+      "booking_id": "bk_0002", "service": "PC", "date": "2026-10-14",
+      "start": "10:00", "end": "11:00",
+      "pinned_provider_id": "A2", "assigned_admin_id": null, "status": "PAID"
+    }
+  ],
+  "candidate": {
+    "booking_id": "cand_0002", "service": "ABA", "date": "2026-10-14",
+    "start": "09:00", "end": "11:00", "pinned_provider_id": null
+  }
+}

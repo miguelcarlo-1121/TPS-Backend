@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\BookingPayment;
 use App\Models\ClientProfile;
 use App\Models\ConsentForm;
+use App\Models\Provider;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -19,7 +20,7 @@ class AppointmentController extends Controller
 
     /**
      * Psychotherapy: psychologist na pinili lang ang makakakita.
-     * ABA / Assessment: lahat ng ADMIN.
+     * ABA / Assessment: ADMIN lang na naka-assign (provider_id ng booking).
      * Hindi kasama ang rejected na payment.
      */
     private function scoped(User $user)
@@ -31,9 +32,18 @@ class AppointmentController extends Controller
                 ->where('psychologist_user_id', $user->id);
         }
 
-        return $q->where(function ($w) use ($user) {
-            $w->where('service_id', '!=', 'psychotherapy')
-              ->orWhere('psychologist_user_id', $user->id);
+        // ADMIN: psychotherapy na sila ang pinili, at ABA/Assessment na naka-assign
+        // sa KANYANG provider_id lang. Hindi niya makikita o magagalaw ang booking ng ibang Admin.
+        $providerId = Provider::where('user_id', $user->id)->value('id');
+
+        return $q->where(function ($w) use ($user, $providerId) {
+            $w->where(function ($x) use ($user) {
+                $x->where('service_id', 'psychotherapy')
+                  ->where('psychologist_user_id', $user->id);
+            })->orWhere(function ($x) use ($providerId) {
+                $x->where('service_id', '!=', 'psychotherapy')
+                  ->where('provider_id', $providerId ?? 0);
+            });
         });
     }
 
@@ -126,6 +136,8 @@ private function unfinished($q)
 
     public function index(Request $request)
 {
+    BookingPayment::completeEnded();
+
     $base = $this->scoped($request->user());
 
     $rows = $this->unfinished(clone $base)
@@ -144,6 +156,8 @@ private function unfinished($q)
     // GET /api/{admin|affiliate}/appointments/history  (completed, declined, cancelled)
     public function history(Request $request)
     {
+        BookingPayment::completeEnded();
+
         $rows = $this->finished($this->scoped($request->user()))
             ->orderByDesc('start_at')
             ->limit(300)
