@@ -13,8 +13,7 @@ return new class extends Migration
             // slug — the frontend id: psychotherapy | aba | assessment
             $table->string('slug', 50)->nullable()->unique()->after('code');
             $table->string('title', 150)->nullable()->after('name');
-            $table->string('meta', 200)->nullable()->after('title');
-            $table->text('description')->nullable()->after('meta');
+            $table->text('description')->nullable()->after('title');
             $table->json('good_for')->nullable()->after('description');
             $table->json('steps')->nullable()->after('good_for');
             // 'enabled' mirrors is_active for the frontend; we'll keep both
@@ -38,4 +37,3 @@ return new class extends Migration
         });
     }
 };
-

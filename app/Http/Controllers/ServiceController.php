@@ -27,7 +27,6 @@ class ServiceController extends Controller
             'name'                => $s->name,
             'title'               => $s->title ?: $s->name,
             'hours'               => round($s->duration_minutes / 60, 1),
-            'meta'                => $s->meta ?? '',
             'text'                => $s->description ?? '',
             'goodFor'             => $s->good_for ? json_decode($s->good_for, true) : [],
             'steps'               => $s->steps    ? json_decode($s->steps,    true) : [],
@@ -127,7 +126,6 @@ class ServiceController extends Controller
             'name'      => ['required', 'string', 'max:100'],
             'title'     => ['nullable', 'string', 'max:150'],
             'hours'     => ['required', 'numeric', 'min:0.5', 'max:8'],
-            'meta'      => ['nullable', 'string', 'max:200'],
             'text'      => ['required', 'string', 'max:2000'],
             'goodFor'   => ['nullable', 'array'],
             'goodFor.*' => ['string', 'max:60'],
@@ -156,7 +154,6 @@ class ServiceController extends Controller
             'slug'             => $slug,
             'name'             => $data['name'],
             'title'            => $data['title'] ?: $data['name'],
-            'meta'             => $data['meta'] ?: null,
             'description'      => $data['text'],
             'good_for'         => json_encode(array_values($data['goodFor'] ?? [])),
             'steps'            => json_encode(array_values($data['steps'] ?? [])),
@@ -186,7 +183,6 @@ class ServiceController extends Controller
             'name'      => ['sometimes', 'required', 'string', 'max:100'],
             'title'     => ['sometimes', 'nullable', 'string', 'max:150'],
             'hours'     => ['sometimes', 'required', 'numeric', 'min:0.5', 'max:8'],
-            'meta'      => ['sometimes', 'nullable', 'string', 'max:200'],
             'text'      => ['sometimes', 'required', 'string', 'max:2000'],
             'goodFor'   => ['sometimes', 'array'],
             'goodFor.*' => ['string', 'max:60'],
@@ -200,7 +196,6 @@ class ServiceController extends Controller
         if (isset($data['name']))    $update['name']             = $data['name'];
         if (isset($data['title']))   $update['title']            = $data['title'] ?: null;
         if (isset($data['hours']))   $update['duration_minutes'] = (int) round($data['hours'] * 60);
-        if (isset($data['meta']))    $update['meta']             = $data['meta'] ?: null;
         if (isset($data['text']))    $update['description']      = $data['text'];
         if (array_key_exists('goodFor', $data)) $update['good_for'] = json_encode(array_values($data['goodFor']));
         if (array_key_exists('steps',   $data)) $update['steps']    = json_encode(array_values($data['steps']));
