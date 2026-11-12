@@ -8,6 +8,7 @@ use App\Models\ConsentForm;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class ConsentController extends Controller
@@ -31,6 +32,40 @@ class ConsentController extends Controller
         return $p->status !== 'rejected' && $p->approval_status === 'approved';
     }
 
+    private function rejected(BookingPayment $p): bool
+    {
+        return $p->status === 'rejected'
+            || in_array($p->approval_status, ['rejected', 'declined'], true);
+    }
+
+    private function isAba(BookingPayment $p): bool
+    {
+        if ($p->service_id === 'aba') {
+            return true;
+        }
+
+        $name = DB::table('services')->where('slug', $p->service_id)->value('name');
+
+        return strtolower(preg_replace('/[^a-z0-9]/i', '', (string) $name)) === 'abatherapy';
+    }
+
+    private function isPsychotherapy(BookingPayment $p): bool
+    {
+        if ($p->service_id === 'psychotherapy') {
+            return true;
+        }
+
+        $name = DB::table('services')->where('slug', $p->service_id)->value('name');
+        $normalizedName = strtolower(preg_replace('/[^a-z0-9]/i', '', (string) $name));
+
+        return str_contains($normalizedName, 'psychotherapy');
+    }
+
+    private function requiresConsent(BookingPayment $p): bool
+    {
+        return $this->isPsychotherapy($p) || $this->isAba($p);
+    }
+
     // GET /api/booking/consent
     public function show(Request $request)
     {
@@ -41,9 +76,18 @@ class ConsentController extends Controller
             return response()->json(['payment' => null]);
         }
 
-        $profile = ClientProfile::where('user_id', $user->id)->first();
+        $profile = ClientProfile::where('booking_payment_id', $p->id)->first()
+            ?? ClientProfile::where('user_id', $user->id)
+                ->whereNull('booking_payment_id')
+                ->orderByDesc('id')
+                ->first();
         $done    = ConsentForm::where('booking_payment_id', $p->id)->first();
-        $psych   = $p->service_id === 'psychotherapy' && $p->psychologist_user_id
+        $isAba   = $this->isAba($p);
+        $isPsychotherapy = $this->isPsychotherapy($p);
+        $serviceName = self::SERVICE_NAMES[$p->service_id]
+            ?? DB::table('services')->where('slug', $p->service_id)->value('name')
+            ?? $p->service_id;
+        $psych   = $isPsychotherapy && $p->psychologist_user_id
             ? User::find($p->psychologist_user_id)
             : null;
 
@@ -52,9 +96,11 @@ class ConsentController extends Controller
                 'id'           => $p->id,
                 'reference'    => $p->reference,
                 'service_id'   => $p->service_id,
-                'service_name' => self::SERVICE_NAMES[$p->service_id] ?? $p->service_id,
-                'required'     => in_array($p->service_id, ['psychotherapy', 'aba'], true),
+                'service_name' => $serviceName,
+                'consent_type' => $isAba ? 'aba' : ($isPsychotherapy ? 'psychotherapy' : null),
+                'required'     => $this->requiresConsent($p),
                 'approved'     => $this->approved($p),
+                'rejected'     => $this->rejected($p),
                 'submitted'    => (bool) $done,
                 'submitted_at' => $done?->submitted_at?->toIso8601String(),
                 'psychologist' => $psych ? trim($psych->first_name . ' ' . $psych->last_name) : null,
@@ -84,11 +130,16 @@ class ConsentController extends Controller
         if (!$p) {
             return response()->json(['message' => 'No booking found.'], 404);
         }
-        if (!in_array($p->service_id, ['psychotherapy', 'aba'], true)) {
+        $isAba = $this->isAba($p);
+        $isPsychotherapy = $this->isPsychotherapy($p);
+        if (!$this->requiresConsent($p)) {
             return response()->json(['message' => 'The consent form is only required for Psychotherapy and ABA Therapy.'], 422);
         }
-        if (!$this->approved($p)) {
-            return response()->json(['message' => 'Your appointment is not approved yet.'], 422);
+        if ($this->rejected($p)) {
+            return response()->json(['message' => 'Consent cannot be submitted for a rejected booking.'], 422);
+        }
+        if (($isAba || $isPsychotherapy) && !$this->approved($p)) {
+            return response()->json(['message' => 'The consent form is available after your appointment is approved.'], 422);
         }
         if (ConsentForm::where('booking_payment_id', $p->id)->exists()) {
             return response()->json(['message' => 'You already submitted your consent form.'], 422);
@@ -98,7 +149,7 @@ class ConsentController extends Controller
         $rel  = ['required', 'string', 'min:2', 'max:60', 'regex:' . self::NAME_RE];
         $tel  = ['required', 'regex:' . self::PHONE_RE];
 
-        if ($p->service_id === 'aba') {
+        if ($isAba) {
             $data = $request->validate([
                 'intake.full_name'             => $name,
                 'intake.birthdate'             => ['required', 'date_format:Y-m-d', 'before_or_equal:today', 'after:1899-12-31'],
@@ -180,7 +231,7 @@ class ConsentController extends Controller
 
         // "Yes" na walang detalye
         $errors = [];
-        if ($p->service_id === 'psychotherapy') {
+        if ($this->isPsychotherapy($p)) {
             foreach (['prev_therapy', 'diagnosed', 'medications', 'medical'] as $k) {
                 if (!empty($data['intake'][$k]) && trim((string) ($data['intake'][$k . '_details'] ?? '')) === '') {
                     $errors["intake.{$k}_details"] = 'Please add the details.';
@@ -193,7 +244,7 @@ class ConsentController extends Controller
         $isMinor = $age < 18;
         $gName   = trim((string) ($data['guardian']['name'] ?? ''));
         $gRel    = trim((string) ($data['guardian']['relation'] ?? ''));
-        $guardianRequired = $p->service_id === 'aba' || $isMinor;
+        $guardianRequired = $isAba || $isMinor;
 
         if ($guardianRequired) {
             if (!preg_match(self::NAME_RE, $gName)) $errors['guardian.name'] = 'Parent / guardian name is required.';
@@ -210,10 +261,10 @@ class ConsentController extends Controller
         if (isset($data['intake']['email'])) {
             $data['intake']['email'] = strtolower(trim($data['intake']['email']));
         }
-        $consentData = $p->service_id === 'aba'
+        $consentData = $isAba
             ? $data['consent']
             : array_map(fn () => true, $data['consent']);
-        $consentData['version'] = $p->service_id === 'aba' ? 'aba-consent-v1' : 'psychotherapy-consent-v1';
+        $consentData['version'] = $isAba ? 'aba-consent-v1' : 'psychotherapy-consent-v1';
         $consentData['signature_data'] = $data['sign']['signature_data'] ?? null;
         $consentData['guardian_signature_data'] = $data['guardian']['signature_data'] ?? null;
 

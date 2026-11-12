@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\ClientProfile;
+use App\Models\BookingPayment;
+use App\Models\SlotHold;
 use Illuminate\Http\Request;
 
 class ClientInfoController extends Controller
@@ -25,10 +27,14 @@ class ClientInfoController extends Controller
     public function show(Request $request)
     {
         $user    = $request->user();
-        $profile = ClientProfile::where('user_id', $user->id)->first();
+        $profile = ClientProfile::where('user_id', $user->id)->orderByDesc('id')->first();
+        $accountName = trim($user->first_name . ' ' . $user->last_name);
 
         if ($profile) {
-            return response()->json(['info' => $this->format($profile), 'saved' => true]);
+            return response()->json([
+                'info' => array_merge($this->format($profile), ['full_name' => $accountName]),
+                'saved' => true,
+            ]);
         }
 
         $email = ($user->email && !str_ends_with($user->email, '@facebook.local')) ? $user->email : '';
@@ -37,7 +43,7 @@ class ClientInfoController extends Controller
         return response()->json([
             'saved' => false,
             'info'  => [
-                'full_name'          => trim($user->first_name . ' ' . $user->last_name),
+                'full_name'          => $accountName,
                 'birthdate'          => '',
                 'email'              => $email,
                 'mobile'             => $phone,
@@ -51,10 +57,25 @@ class ClientInfoController extends Controller
     // POST /api/booking/client-info
     public function store(Request $request)
     {
+        $user = $request->user();
+        $holdData = $request->validate([
+            'hold_id' => ['required', 'integer'],
+        ]);
+        $hold = SlotHold::where('id', $holdData['hold_id'])
+            ->where('user_id', $user->id)
+            ->where('expires_at', '>', now())
+            ->first();
+
+        if (!$hold) {
+            return response()->json([
+                'message' => 'Your held time has expired. Please pick a date and time again.',
+            ], 409);
+        }
+
         $nameRule = ['required', 'string', 'min:2', 'max:150', 'regex:/^[\pL][\pL\s.\'’-]*$/u'];
         $phoneRule = ['required', 'regex:/^09\d{9}$/'];
 
-        $data = $request->validate([
+        $profileData = $request->validate([
             'full_name'          => $nameRule,
             'birthdate'          => ['required', 'date_format:Y-m-d', 'before_or_equal:today', 'after:1899-12-31'],
             'email'              => ['required', 'email:rfc', 'max:190'],
@@ -71,15 +92,31 @@ class ClientInfoController extends Controller
             'emergency_phone.regex'    => 'Contact phone must be 11 digits (e.g. 09123456789).',
         ]);
 
-        $data['full_name']          = trim($data['full_name']);
-        $data['emergency_name']     = trim($data['emergency_name']);
-        $data['emergency_relation'] = trim($data['emergency_relation']);
-        $data['email']              = strtolower(trim($data['email']));
+        $profileData['full_name']          = trim($user->first_name . ' ' . $user->last_name);
+        $profileData['emergency_name']     = trim($profileData['emergency_name']);
+        $profileData['emergency_relation'] = trim($profileData['emergency_relation']);
+        $profileData['email']              = strtolower(trim($profileData['email']));
 
-        $profile = ClientProfile::updateOrCreate(
-            ['user_id' => $request->user()->id],
-            $data
-        );
+        $rejectedBooking = BookingPayment::where('user_id', $user->id)
+            ->where('status', 'rejected')
+            ->where('provider_id', $hold->provider_id)
+            ->where('service_id', $hold->service_id)
+            ->where('start_at', $hold->start_at)
+            ->where('end_at', $hold->end_at)
+            ->latest('id')
+            ->first();
+        $profile = $rejectedBooking
+            ? ClientProfile::where('booking_payment_id', $rejectedBooking->id)->first()
+            : null;
+
+        if ($profile) {
+            $profile->fill($profileData + ['slot_hold_id' => $hold->id])->save();
+        } else {
+            $profile = ClientProfile::updateOrCreate(
+                ['user_id' => $user->id, 'slot_hold_id' => $hold->id],
+                $profileData
+            );
+        }
 
         return response()->json(['info' => $this->format($profile)]);
     }

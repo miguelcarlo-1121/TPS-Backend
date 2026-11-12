@@ -7,6 +7,7 @@ use App\Models\ClientProfile;
 use App\Models\ConsentForm;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
@@ -31,8 +32,19 @@ class BookingConfirmationController extends Controller
     // Consent: hinahanap ang column na nag-uugnay sa booking. Kung wala, 'false'.
     private function consentDone(BookingPayment $p): bool
     {
-        return in_array($p->service_id, ['psychotherapy', 'aba'], true)
+        return ($this->isPsychotherapy($p) || $p->service_id === 'aba')
             && ConsentForm::where('booking_payment_id', $p->id)->exists();
+    }
+
+    private function isPsychotherapy(BookingPayment $p): bool
+    {
+        if ($p->service_id === 'psychotherapy') {
+            return true;
+        }
+
+        $name = DB::table('services')->where('slug', $p->service_id)->value('name');
+
+        return str_contains(strtolower(preg_replace('/[^a-z0-9]/i', '', (string) $name)), 'psychotherapy');
     }
 
     // GET /api/booking/confirmation?reference=TF-XXXX
@@ -50,13 +62,20 @@ class BookingConfirmationController extends Controller
             return response()->json(['message' => 'Appointment not found.'], 404);
         }
 
-        $profile = ClientProfile::where('user_id', $p->user_id)->first();
+        $profile = ClientProfile::where('booking_payment_id', $p->id)->first()
+            ?? ClientProfile::where('user_id', $p->user_id)
+                ->whereNull('booking_payment_id')
+                ->orderByDesc('id')
+                ->first();
 
-        $psych = $p->service_id === 'psychotherapy' && $p->psychologist_user_id
+        $isPsychotherapy = $this->isPsychotherapy($p);
+        $psych = $isPsychotherapy && $p->psychologist_user_id
             ? User::find($p->psychologist_user_id)
             : null;
 
-        $serviceName = self::SERVICE_NAMES[$p->service_id] ?? $p->service_id;
+        $serviceName = self::SERVICE_NAMES[$p->service_id]
+            ?? DB::table('services')->where('slug', $p->service_id)->value('name')
+            ?? $p->service_id;
         $serviceFullName = $p->assessment_type_name
             ? ($serviceName . ' (' . $p->assessment_type_name . ')')
             : $serviceName;
@@ -93,7 +112,7 @@ class BookingConfirmationController extends Controller
                         ? Storage::disk('public')->url($p->receipt_path)
                         : null,
                 ],
-                'consent_required' => in_array($p->service_id, ['psychotherapy', 'aba'], true),
+                'consent_required' => $isPsychotherapy || $p->service_id === 'aba',
                 'consent_complete' => $this->consentDone($p),
             ],
         ]);

@@ -25,9 +25,56 @@ class BookingAvailabilityController extends Controller
     private const HOLD_MINUTES = 60;
     private const SLOT_INTERVAL_MINUTES = 30;
 
+    private function resolveService(string $service): ?object
+    {
+        $record = DB::table('services')->where('slug', $service)->first();
+        if ($record) {
+            return $record;
+        }
+
+        $legacyNames = [
+            'psychotherapy' => fn (string $name) => str_contains($name, 'psychotherapy'),
+            'aba' => fn (string $name) => $name === 'abatherapy',
+            'assessment' => fn (string $name) => in_array($name, ['assessmentandconsultation', 'assessmentconsultation'], true),
+        ];
+        $matchesLegacyName = $legacyNames[$service] ?? null;
+        if (!$matchesLegacyName) {
+            return null;
+        }
+
+        return DB::table('services')
+            ->get()
+            ->first(fn ($row) => $matchesLegacyName(strtolower(preg_replace(
+                '/[^a-z0-9]/i',
+                '',
+                str_replace('&', 'and', (string) $row->name)
+            ))));
+    }
+
+    private function isPsychotherapy(string $service): bool
+    {
+        $record = $this->resolveService($service);
+        $name = strtolower(preg_replace('/[^a-z0-9]/i', '', (string) ($record->name ?? '')));
+
+        return $service === 'psychotherapy' || str_contains($name, 'psychotherapy');
+    }
+
+    private function isAssessment(string $service): bool
+    {
+        $record = $this->resolveService($service);
+        $name = strtolower(preg_replace(
+            '/[^a-z0-9]/i',
+            '',
+            str_replace('&', 'and', (string) ($record->name ?? ''))
+        ));
+
+        return $service === 'assessment'
+            || in_array($name, ['assessmentandconsultation', 'assessmentconsultation'], true);
+    }
+
     private function duration(string $service, ?int $assessmentTypeId = null): int
     {
-        if ($service === 'assessment' && $assessmentTypeId) {
+        if ($this->isAssessment($service) && $assessmentTypeId) {
             $type = DB::table('assessment_types')->find($assessmentTypeId);
             if ($type && $type->duration_minutes > 0) {
                 return (int) $type->duration_minutes;
@@ -44,7 +91,7 @@ class BookingAvailabilityController extends Controller
 
     private function providerIds(string $service, $psychologistId): array
     {
-        if ($service === 'psychotherapy') {
+        if ($this->isPsychotherapy($service)) {
             $users = User::whereIn('role', ['ADMIN', 'AFFILIATE'])->where('is_active', true);
 
             if ($psychologistId) {
@@ -139,6 +186,11 @@ class BookingAvailabilityController extends Controller
             'assessment_type_id' => ['nullable', 'integer'],
             'month'              => ['required', 'date_format:Y-m'],
         ]);
+        $service = $this->resolveService($data['service']);
+        if (!$service || !$service->enabled) {
+            return response()->json(['message' => 'This service is not currently available.'], 404);
+        }
+        $data['service'] = $service->slug;
 
         $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
 
@@ -168,6 +220,11 @@ class BookingAvailabilityController extends Controller
             'assessment_type_id' => ['nullable', 'integer'],
             'date'               => ['required', 'date_format:Y-m-d'],
         ]);
+        $service = $this->resolveService($data['service']);
+        if (!$service || !$service->enabled) {
+            return response()->json(['message' => 'This service is not currently available.'], 404);
+        }
+        $data['service'] = $service->slug;
 
         $ids = $this->providerIds($data['service'], $data['psychologist_id'] ?? null);
 
@@ -242,14 +299,20 @@ class BookingAvailabilityController extends Controller
             'date'               => ['required', 'date_format:Y-m-d'],
             'start_time'         => ['required', 'date_format:H:i'],
         ]);
+        $service = $this->resolveService($data['service']);
+        if (!$service || !$service->enabled) {
+            return response()->json(['message' => 'This service is not currently available.'], 404);
+        }
+        $data['service'] = $service->slug;
 
         // Psychotherapy: kailangan na ng psychologist bago mag-hold
-        if ($data['service'] === 'psychotherapy' && empty($data['psychologist_id'])) {
+        $isPsychotherapy = $this->isPsychotherapy($data['service']);
+        if ($isPsychotherapy && empty($data['psychologist_id'])) {
             return response()->json(['message' => 'Please choose a psychologist first.'], 422);
         }
 
         $assessmentType = null;
-        if ($data['service'] === 'assessment' && !empty($data['assessment_type_id'])) {
+        if ($this->isAssessment($data['service']) && !empty($data['assessment_type_id'])) {
             $assessmentType = DB::table('assessment_types')->find($data['assessment_type_id']);
         }
 
@@ -268,7 +331,7 @@ class BookingAvailabilityController extends Controller
         $dayStart = Carbon::parse($data['date'])->startOfDay();
         $dayEnd   = $dayStart->copy()->endOfDay();
 
-        return DB::transaction(function () use ($data, $user, $dur, $ids, $dayStart, $dayEnd, $assessmentType) {
+        return DB::transaction(function () use ($data, $user, $dur, $ids, $dayStart, $dayEnd, $assessmentType, $isPsychotherapy) {
             Provider::whereIn('id', $ids)->lockForUpdate()->get();
 
             $match = $this->candidates($ids, $dayStart, $dayEnd, $dur, $user->id)
@@ -299,7 +362,7 @@ class BookingAvailabilityController extends Controller
                     $ids,
                     $dur,
                     $user->id,
-                    $data['service'] === 'psychotherapy',
+                    $isPsychotherapy,
                 );
                 Log::info('BookingAvailabilityController@hold: engine flagged NOT_FEASIBLE', [
                     'user_id'    => $user->id,
@@ -319,7 +382,7 @@ class BookingAvailabilityController extends Controller
             // --- ABA / Assessment: ang Admin na pinili ng ILP ang gagamitin (isa lang) ---
             $holdProviderId = $match['provider_id'];
 
-            if ($data['service'] !== 'psychotherapy' && SchedulingEngineService::isFeasible($engineResult)) {
+            if (!$isPsychotherapy && SchedulingEngineService::isFeasible($engineResult)) {
                 $assigned = SchedulingEngineService::assignedAdminProviderId($engineResult);
 
                 if ($assigned !== null && $assigned !== (int) $holdProviderId
@@ -389,6 +452,11 @@ class BookingAvailabilityController extends Controller
             'date'               => ['required', 'date_format:Y-m-d'],
             'start_time'         => ['nullable', 'date_format:H:i'],
         ]);
+        $service = $this->resolveService($data['service']);
+        if (!$service || !$service->enabled) {
+            return response()->json(['recommendations' => [], 'reason' => 'SERVICE_UNAVAILABLE'], 404);
+        }
+        $data['service'] = $service->slug;
 
         $none = fn (?string $reason = null) => response()->json(['recommendations' => [], 'reason' => $reason]);
 
@@ -408,7 +476,7 @@ class BookingAvailabilityController extends Controller
             return $none('NO_PROVIDER');
         }
 
-        $isPsycho   = $data['service'] === 'psychotherapy';
+        $isPsycho   = $this->isPsychotherapy($data['service']);
         $providerId = $isPsycho ? (int) $ids[0] : null;
         if ($isPsycho && empty($data['psychologist_id'])) {
             return $none('NO_PSYCHOLOGIST');

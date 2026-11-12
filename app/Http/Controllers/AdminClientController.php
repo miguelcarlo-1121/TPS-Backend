@@ -7,6 +7,7 @@ use App\Models\ClientProfile;
 use App\Models\BookingPayment;
 use App\Models\ConsentForm;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class AdminClientController extends Controller
@@ -30,7 +31,11 @@ class AdminClientController extends Controller
         $clients = $query->orderByDesc('id')->get();
         $clientIds = $clients->pluck('id');
 
-        $profiles = ClientProfile::whereIn('user_id', $clientIds)->get()->keyBy('user_id');
+        $profiles = ClientProfile::whereIn('user_id', $clientIds)
+            ->orderByDesc('id')
+            ->get()
+            ->unique('user_id')
+            ->keyBy('user_id');
         $payments = BookingPayment::whereIn('user_id', $clientIds)->get()->groupBy('user_id');
 
         $result = $clients->map(function (User $u) use ($profiles, $payments) {
@@ -66,38 +71,62 @@ class AdminClientController extends Controller
     public function show($id)
     {
         $user = User::where('role', 'CLIENT')->findOrFail($id);
-        $profile = ClientProfile::where('user_id', $user->id)->first();
+        $profile = ClientProfile::where('user_id', $user->id)
+            ->orderByDesc('id')
+            ->first();
 
         $payments = BookingPayment::where('user_id', $user->id)
-            ->orderByDesc('date')
-            ->orderByDesc('start_time')
+            ->orderByDesc('start_at')
+            ->orderByDesc('id')
             ->get();
 
-        $psychIds = $payments->pluck('psychologist_id')->filter()->unique();
+        $serviceNames = DB::table('services')
+            ->whereIn('slug', $payments->pluck('service_id')->unique())
+            ->pluck('name', 'slug');
+        $psychIds = $payments->pluck('psychologist_user_id')->filter()->unique();
         $psychs = User::whereIn('id', $psychIds)->get()->keyBy('id');
 
-        $appointments = $payments->map(function ($p) use ($psychs) {
-            $psych = $p->psychologist_id ? $psychs->get($p->psychologist_id) : null;
+        $appointments = $payments->map(function ($p) use ($psychs, $serviceNames) {
+            $psych = $p->psychologist_user_id ? $psychs->get($p->psychologist_user_id) : null;
             $psychName = $psych ? trim($psych->first_name . ' ' . $psych->last_name) : 'Clinic Assigned';
+            $serviceName = $serviceNames[$p->service_id] ?? match ($p->service_id) {
+                'psychotherapy' => 'Psychotherapy',
+                'aba' => 'ABA Therapy',
+                'assessment' => 'Assessment',
+                default => ucfirst(str_replace('-', ' ', $p->service_id)),
+            };
+            $status = $p->status === 'rejected'
+                ? 'Rejected'
+                : ($p->status === 'to_verify'
+                    ? 'Payment pending'
+                    : match ($p->approval_status) {
+                        'approved' => 'Approved',
+                        'declined' => 'Declined',
+                        default => 'Approval pending',
+                    });
 
             return [
                 'id'        => $p->id,
-                'reference' => $p->reference_number,
-                'date'      => "{$p->date} · " . substr($p->start_time, 0, 5),
-                'service'   => ucfirst($p->service_id),
+                'reference' => $p->reference,
+                'date'      => $p->start_at->format('Y-m-d · g:i A'),
+                'service'   => $p->assessment_type_name
+                    ? "{$serviceName} ({$p->assessment_type_name})"
+                    : $serviceName,
                 'by'        => $psychName,
-                'mode'      => $p->session_format ?? 'Online / In-person',
-                'status'    => ucfirst($p->status ?? 'Pending'),
+                'mode'      => 'Online / In-person',
+                'status'    => $status,
             ];
         });
 
         $paymentRecords = $payments->map(function ($p) {
             return [
                 'id'      => $p->id,
-                'date'    => $p->date,
+                'date'    => $p->start_at->format('Y-m-d'),
                 'amount'  => (float) $p->amount_paid,
-                'method'  => $p->payment_method ?? 'Online',
-                'status'  => $p->status === 'verified' ? 'Paid' : ucfirst($p->status ?? 'Pending'),
+                'method'  => $p->method_name,
+                'status'  => $p->status === 'verified'
+                    ? 'Paid'
+                    : ($p->status === 'rejected' ? 'Rejected' : 'Pending'),
             ];
         });
 
@@ -156,9 +185,11 @@ class AdminClientController extends Controller
         $user->save();
 
         if (!empty($data['birthdate']) || !empty($data['emergencyName']) || !empty($data['emergencyPhone'])) {
-            ClientProfile::updateOrCreate(
-                ['user_id' => $user->id],
-                [
+            $profile = ClientProfile::where('user_id', $user->id)
+                ->orderByDesc('id')
+                ->first();
+            if ($profile) {
+                $profile->fill([
                     'full_name'          => trim($data['name']),
                     'birthdate'          => $data['birthdate'] ?? '2000-01-01',
                     'email'              => $user->email,
@@ -166,8 +197,8 @@ class AdminClientController extends Controller
                     'emergency_name'     => $data['emergencyName'] ?? '',
                     'emergency_relation' => 'Emergency Contact',
                     'emergency_phone'    => $data['emergencyPhone'] ?? '09000000000',
-                ]
-            );
+                ])->save();
+            }
         }
 
         return response()->json([

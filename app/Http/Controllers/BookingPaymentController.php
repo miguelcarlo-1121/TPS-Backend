@@ -25,6 +25,38 @@ class BookingPaymentController extends Controller
         'assessment'    => 'Assessment',
     ];
 
+    private function isFullPaymentOnlyService(string $serviceSlug): bool
+    {
+        if (in_array($serviceSlug, PaymentSettingsController::FULL_ONLY, true)) {
+            return true;
+        }
+
+        $service = DB::table('services')->where('slug', $serviceSlug)->first();
+        $normalizedName = strtolower(preg_replace(
+            '/[^a-z0-9]/i',
+            '',
+            (string) ($service->name ?? '')
+        ));
+
+        return $normalizedName === 'abatherapy';
+    }
+
+    private function isPsychotherapyService(string $serviceSlug, $service = null): bool
+    {
+        if ($serviceSlug === 'psychotherapy') {
+            return true;
+        }
+
+        $service ??= DB::table('services')->where('slug', $serviceSlug)->first();
+        $normalizedName = strtolower(preg_replace(
+            '/[^a-z0-9]/i',
+            '',
+            (string) ($service->name ?? '')
+        ));
+
+        return str_contains($normalizedName, 'psychotherapy');
+    }
+
     // ---------------------------------------------------------------
     // CLIENT
     // ---------------------------------------------------------------
@@ -36,22 +68,29 @@ class BookingPaymentController extends Controller
             'service'            => ['required', 'string', 'max:50'],
             'assessment_type_id' => ['nullable', 'integer'],
         ]);
+        $service = DB::table('services')->where('slug', $data['service'])->first();
+        if (!$service || !$service->enabled) {
+            return response()->json(['message' => 'This service is not currently available.'], 404);
+        }
 
         $settings = DB::table('payment_settings')->first();
         if ($data['service'] === 'assessment' && !empty($data['assessment_type_id'])) {
-            $typePrice = (float) DB::table('assessment_types')->where('id', $data['assessment_type_id'])->value('price');
+            $typePrice = (float) DB::table('assessment_types')
+                ->where('id', $data['assessment_type_id'])
+                ->where('enabled', true)
+                ->value('price');
             $price = $typePrice > 0 ? $typePrice : (float) DB::table('service_prices')->where('service_id', 'assessment')->value('price');
         } else {
             $price = (float) DB::table('service_prices')->where('service_id', $data['service'])->value('price');
         }
-        $fixedDownpayment = $data['service'] === 'psychotherapy'
+        $fixedDownpayment = $this->isPsychotherapyService($data['service'], $service)
             ? (float) ($settings->psychotherapy_downpayment_amount ?? 750)
             : ($data['service'] === 'assessment'
                 ? (float) ($settings->assessment_downpayment_amount ?? 750)
                 : null);
 
         return response()->json([
-            'downpayment_allowed' => !in_array($data['service'], PaymentSettingsController::FULL_ONLY, true)
+            'downpayment_allowed' => !$this->isFullPaymentOnlyService($data['service'])
                 && ($fixedDownpayment === null || ($fixedDownpayment > 0 && $fixedDownpayment < $price)),
             'price'               => $price,
             'downpayment_percent' => (int) ($settings->downpayment_percent ?? 50),
@@ -81,10 +120,6 @@ class BookingPaymentController extends Controller
 
         $user = $request->user();
 
-        if (!ClientProfile::where('user_id', $user->id)->exists()) {
-            return response()->json(['message' => 'Please complete your details first.'], 422);
-        }
-
         if (!preg_match('/^data:image\/jpeg;base64,/', $data['receipt'])) {
             return response()->json(['message' => 'Please upload a JPG or PNG screenshot.'], 422);
         }
@@ -105,9 +140,22 @@ class BookingPaymentController extends Controller
                     'message' => 'Your held time has expired. Please pick a date and time again.',
                 ], 409);
             }
+            $clientProfile = ClientProfile::where('user_id', $user->id)
+                ->where('slot_hold_id', $hold->id)
+                ->first();
+            if (!$clientProfile) {
+                return response()->json(['message' => 'Please complete your details first.'], 422);
+            }
+            $service = DB::table('services')->where('slug', $hold->service_id)->first();
+            if (!$service || !$service->enabled) {
+                return response()->json(['message' => 'This service is no longer available.'], 409);
+            }
 
             if ($hold->service_id === 'assessment' && $hold->assessment_type_id) {
-                $typePrice = (float) DB::table('assessment_types')->where('id', $hold->assessment_type_id)->value('price');
+                $typePrice = (float) DB::table('assessment_types')
+                    ->where('id', $hold->assessment_type_id)
+                    ->where('enabled', true)
+                    ->value('price');
                 $price = $typePrice > 0 ? $typePrice : (float) DB::table('service_prices')->where('service_id', $hold->service_id)->value('price');
             } else {
                 $price = (float) DB::table('service_prices')->where('service_id', $hold->service_id)->value('price');
@@ -120,9 +168,10 @@ class BookingPaymentController extends Controller
             $percent  = (int) (DB::table('payment_settings')->value('downpayment_percent') ?: 50);
             $psychotherapyDownpayment = (float) (DB::table('payment_settings')->value('psychotherapy_downpayment_amount') ?: 750);
             $assessmentDownpayment = (float) (DB::table('payment_settings')->value('assessment_downpayment_amount') ?: 750);
-            $fullOnly = in_array($hold->service_id, PaymentSettingsController::FULL_ONLY, true);
-            $fixedDownpaymentService = in_array($hold->service_id, ['psychotherapy', 'assessment'], true);
-            $downAmount = $hold->service_id === 'psychotherapy'
+            $fullOnly = $this->isFullPaymentOnlyService($hold->service_id);
+            $isPsychotherapy = $this->isPsychotherapyService($hold->service_id, $service);
+            $fixedDownpaymentService = $isPsychotherapy || $hold->service_id === 'assessment';
+            $downAmount = $isPsychotherapy
                 ? $psychotherapyDownpayment
                 : ($hold->service_id === 'assessment'
                     ? $assessmentDownpayment
@@ -147,7 +196,7 @@ class BookingPaymentController extends Controller
             $path = 'receipts/' . Str::random(40) . '.jpg';
             Storage::disk('public')->put($path, $binary);
 
-            $psychUserId = $hold->service_id === 'psychotherapy'
+            $psychUserId = $isPsychotherapy
                 ? Provider::where('id', $hold->provider_id)->value('user_id')
                 : null;
 
@@ -203,6 +252,8 @@ class BookingPaymentController extends Controller
                 ]);
             }
 
+            $clientProfile->booking_payment_id = $payment->id;
+            $clientProfile->save();
             $hold->delete(); // ang booking_payments na ang naka-block sa slot
 
             return response()->json(['payment' => [
@@ -235,7 +286,9 @@ class BookingPaymentController extends Controller
             $stage = 'psychologist_pending';
         }
 
-        $psych = $p->service_id === 'psychotherapy' && $p->psychologist_user_id
+        $service = DB::table('services')->where('slug', $p->service_id)->first();
+        $isPsychotherapy = $this->isPsychotherapyService($p->service_id, $service);
+        $psych = $isPsychotherapy && $p->psychologist_user_id
             ? User::find($p->psychologist_user_id)
             : null;
 
@@ -251,12 +304,15 @@ class BookingPaymentController extends Controller
             'rejected_by'     => $p->status === 'rejected'
                 ? 'payment'
                 : ($p->approval_status === 'declined'
-                    ? ($p->service_id === 'psychotherapy' ? 'psychologist' : 'clinic')
+                    ? ($isPsychotherapy ? 'psychologist' : 'clinic')
                     : null),
             'reviewer'        => $reviewer ? trim($reviewer->first_name . ' ' . $reviewer->last_name) : null,
             'reviewer_role'   => $reviewer?->role,
             'service_id'      => $p->service_id,
-            'service_name'    => $p->assessment_type_name ? ((self::SERVICE_NAMES[$p->service_id] ?? $p->service_id) . ' (' . $p->assessment_type_name . ')') : (self::SERVICE_NAMES[$p->service_id] ?? $p->service_id),
+            'consent_type'    => $isPsychotherapy ? 'psychotherapy' : ($this->isFullPaymentOnlyService($p->service_id) ? 'aba' : null),
+            'service_name'    => $p->assessment_type_name
+                ? ((self::SERVICE_NAMES[$p->service_id] ?? $service->name ?? $p->service_id) . ' (' . $p->assessment_type_name . ')')
+                : (self::SERVICE_NAMES[$p->service_id] ?? $service->name ?? $p->service_id),
             'assessment_type' => $p->assessment_type_name,
             'psychologist'    => $psych ? trim($psych->first_name . ' ' . $psych->last_name) : null,
             'date'            => $p->start_at->format('Y-m-d'),
@@ -551,7 +607,7 @@ class BookingPaymentController extends Controller
 
     private function format(BookingPayment $p, $profiles, $users, $balances = null): array
     {
-        $profile = $profiles[$p->user_id] ?? null;
+        $profile = $profiles['booking'][$p->id] ?? $profiles['user'][$p->user_id] ?? null;
         $u       = $users[$p->user_id] ?? null;
 
         // Pinakabagong balance receipt (galing sa preloaded list kung meron, kung hindi mag-query)
@@ -592,6 +648,22 @@ class BookingPaymentController extends Controller
         ];
     }
 
+    private function profilesFor($payments): array
+    {
+        $userIds = $payments->pluck('user_id')->unique();
+
+        return [
+            'booking' => ClientProfile::whereIn('booking_payment_id', $payments->pluck('id'))
+                ->get()
+                ->keyBy('booking_payment_id'),
+            'user' => ClientProfile::whereIn('user_id', $userIds)
+                ->whereNull('booking_payment_id')
+                ->orderByDesc('id')
+                ->get()
+                ->keyBy('user_id'),
+        ];
+    }
+
     // GET /api/admin/payments  |  GET /api/affiliate/payments
     public function index(Request $request)
     {
@@ -606,7 +678,7 @@ class BookingPaymentController extends Controller
         })->values();
 
         $ids      = $rows->pluck('user_id')->unique();
-        $profiles = ClientProfile::whereIn('user_id', $ids)->get()->keyBy('user_id');
+        $profiles = $this->profilesFor($rows);
         $users    = User::whereIn('id', $ids)->get()->keyBy('id');
 
         // Pinakabagong balance receipt ng bawat payment
@@ -656,7 +728,7 @@ class BookingPaymentController extends Controller
             'reject_reason' => $reason,
         ])->save();
 
-        $profiles = ClientProfile::where('user_id', $p->user_id)->get()->keyBy('user_id');
+        $profiles = $this->profilesFor(collect([$p]));
         $users    = User::where('id', $p->user_id)->get()->keyBy('id');
 
         return response()->json(['payment' => $this->format($p, $profiles, $users)]);
@@ -719,7 +791,7 @@ class BookingPaymentController extends Controller
         });
 
         $p->refresh();
-        $profiles = ClientProfile::where('user_id', $p->user_id)->get()->keyBy('user_id');
+        $profiles = $this->profilesFor(collect([$p]));
         $users    = User::where('id', $p->user_id)->get()->keyBy('id');
 
         return response()->json(['payment' => $this->format($p, $profiles, $users)]);

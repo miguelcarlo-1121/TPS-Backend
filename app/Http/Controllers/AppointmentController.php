@@ -9,6 +9,7 @@ use App\Models\Provider;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AppointmentController extends Controller
 {
@@ -18,6 +19,28 @@ class AppointmentController extends Controller
         'assessment'    => 'Assessment',
     ];
 
+    private function psychotherapySlugs(): array
+    {
+        $customSlugs = DB::table('services')
+            ->get(['slug', 'name'])
+            ->filter(fn ($service) => str_contains(
+                strtolower(preg_replace('/[^a-z0-9]/i', '', (string) $service->name)),
+                'psychotherapy'
+            ))
+            ->pluck('slug')
+            ->all();
+
+        return array_values(array_unique(array_merge(['psychotherapy'], $customSlugs)));
+    }
+
+    private function isPsychotherapy(BookingPayment $p, $serviceNames): bool
+    {
+        $name = $serviceNames[$p->service_id] ?? self::SERVICE_NAMES[$p->service_id] ?? '';
+
+        return $p->service_id === 'psychotherapy'
+            || str_contains(strtolower(preg_replace('/[^a-z0-9]/i', '', (string) $name)), 'psychotherapy');
+    }
+
     /**
      * Psychotherapy: psychologist na pinili lang ang makakakita.
      * ABA / Assessment: ADMIN lang na naka-assign (provider_id ng booking).
@@ -26,9 +49,10 @@ class AppointmentController extends Controller
     private function scoped(User $user)
     {
         $q = BookingPayment::query()->where('status', '!=', 'rejected');
+        $psychotherapySlugs = $this->psychotherapySlugs();
 
         if ($user->role === 'AFFILIATE') {
-            return $q->where('service_id', 'psychotherapy')
+            return $q->whereIn('service_id', $psychotherapySlugs)
                 ->where('psychologist_user_id', $user->id);
         }
 
@@ -36,12 +60,12 @@ class AppointmentController extends Controller
         // sa KANYANG provider_id lang. Hindi niya makikita o magagalaw ang booking ng ibang Admin.
         $providerId = Provider::where('user_id', $user->id)->value('id');
 
-        return $q->where(function ($w) use ($user, $providerId) {
-            $w->where(function ($x) use ($user) {
-                $x->where('service_id', 'psychotherapy')
+        return $q->where(function ($w) use ($user, $providerId, $psychotherapySlugs) {
+            $w->where(function ($x) use ($user, $psychotherapySlugs) {
+                $x->whereIn('service_id', $psychotherapySlugs)
                   ->where('psychologist_user_id', $user->id);
-            })->orWhere(function ($x) use ($providerId) {
-                $x->where('service_id', '!=', 'psychotherapy')
+            })->orWhere(function ($x) use ($providerId, $psychotherapySlugs) {
+                $x->whereNotIn('service_id', $psychotherapySlugs)
                   ->where('provider_id', $providerId ?? 0);
             });
         });
@@ -76,16 +100,25 @@ private function unfinished($q)
         });
 }
     // not_required (Assessment) | pending | submitted
-    private function consentStatus(BookingPayment $p, $consents): string
+    private function isAba(BookingPayment $p, $serviceNames): bool
     {
-        if (!in_array($p->service_id, ['psychotherapy', 'aba'], true)) return 'not_required';
+        $name = $serviceNames[$p->service_id] ?? self::SERVICE_NAMES[$p->service_id] ?? '';
+
+        return $p->service_id === 'aba'
+            || strtolower(preg_replace('/[^a-z0-9]/i', '', (string) $name)) === 'abatherapy';
+    }
+
+    private function consentStatus(BookingPayment $p, $consents, $serviceNames): string
+    {
+        if (!$this->isPsychotherapy($p, $serviceNames) && !$this->isAba($p, $serviceNames)) return 'not_required';
         return $consents->has($p->id) ? 'submitted' : 'pending';
     }
 
-    private function format(BookingPayment $p, $profiles, $users, $consents): array
+    private function format(BookingPayment $p, $profiles, $users, $consents, $serviceNames): array
     {
-        $profile = $profiles[$p->user_id] ?? null;
+        $profile = $profiles['booking'][$p->id] ?? $profiles['user'][$p->user_id] ?? null;
         $u       = $users[$p->user_id] ?? null;
+        $serviceName = self::SERVICE_NAMES[$p->service_id] ?? $serviceNames[$p->service_id] ?? $p->service_id;
 
         return [
             'id'                 => $p->id,
@@ -99,7 +132,8 @@ private function unfinished($q)
             'emergency_relation' => $profile->emergency_relation ?? '',
             'emergency_phone'    => $profile->emergency_phone ?? '',
             'service_id'         => $p->service_id,
-            'service_name'       => $p->assessment_type_name ? ((self::SERVICE_NAMES[$p->service_id] ?? $p->service_id) . ' (' . $p->assessment_type_name . ')') : (self::SERVICE_NAMES[$p->service_id] ?? $p->service_id),
+            'service_name'       => $p->assessment_type_name ? ($serviceName . ' (' . $p->assessment_type_name . ')') : $serviceName,
+            'consent_type'       => $this->isAba($p, $serviceNames) ? 'aba' : ($this->isPsychotherapy($p, $serviceNames) ? 'psychotherapy' : null),
             'assessment_type'    => $p->assessment_type_name,
             'date'               => $p->start_at->format('Y-m-d'),
             'start_time'         => $p->start_at->format('H:i'),
@@ -112,7 +146,7 @@ private function unfinished($q)
             'decline_reason'     => $p->decline_reason,
             'completed_at'       => $p->completed_at ? Carbon::parse($p->completed_at)->toIso8601String() : null,
             'cancelled_at'       => $p->cancelled_at ? Carbon::parse($p->cancelled_at)->toIso8601String() : null,
-            'consent_status'     => $this->consentStatus($p, $consents),
+            'consent_status'     => $this->consentStatus($p, $consents, $serviceNames),
         ];
     }
 
@@ -121,17 +155,27 @@ private function unfinished($q)
         $ids = $rows->pluck('user_id')->unique();
 
         return [
-            ClientProfile::whereIn('user_id', $ids)->get()->keyBy('user_id'),
+            [
+                'booking' => ClientProfile::whereIn('booking_payment_id', $rows->pluck('id'))
+                    ->get()
+                    ->keyBy('booking_payment_id'),
+                'user' => ClientProfile::whereIn('user_id', $ids)
+                    ->whereNull('booking_payment_id')
+                    ->orderByDesc('id')
+                    ->get()
+                    ->keyBy('user_id'),
+            ],
             User::whereIn('id', $ids)->get()->keyBy('id'),
             ConsentForm::whereIn('booking_payment_id', $rows->pluck('id'))->pluck('submitted_at', 'booking_payment_id'),
+            DB::table('services')->whereIn('slug', $rows->pluck('service_id')->unique())->pluck('name', 'slug'),
         ];
     }
 
     private function one(BookingPayment $p): array
     {
-        [$profiles, $users, $consents] = $this->lookups(collect([$p]));
+        [$profiles, $users, $consents, $serviceNames] = $this->lookups(collect([$p]));
 
-        return $this->format($p, $profiles, $users, $consents);
+        return $this->format($p, $profiles, $users, $consents, $serviceNames);
     }
 
     public function index(Request $request)
@@ -145,10 +189,10 @@ private function unfinished($q)
         ->limit(500)
         ->get();
 
-    [$profiles, $users, $consents] = $this->lookups($rows);
+    [$profiles, $users, $consents, $serviceNames] = $this->lookups($rows);
 
     return response()->json([
-        'appointments'  => $rows->map(fn ($p) => $this->format($p, $profiles, $users, $consents))->values(),
+        'appointments'  => $rows->map(fn ($p) => $this->format($p, $profiles, $users, $consents, $serviceNames))->values(),
         'history_count' => $this->finished(clone $base)->count(),
     ]);
 }
@@ -163,10 +207,10 @@ private function unfinished($q)
             ->limit(300)
             ->get();
 
-        [$profiles, $users, $consents] = $this->lookups($rows);
+        [$profiles, $users, $consents, $serviceNames] = $this->lookups($rows);
 
         return response()->json([
-            'appointments' => $rows->map(fn ($p) => $this->format($p, $profiles, $users, $consents))->values(),
+            'appointments' => $rows->map(fn ($p) => $this->format($p, $profiles, $users, $consents, $serviceNames))->values(),
         ]);
     }
 
@@ -175,7 +219,9 @@ private function unfinished($q)
     {
         $p = $this->scoped($request->user())->findOrFail($id);
 
-        if (!in_array($p->service_id, ['psychotherapy', 'aba'], true)) {
+        $serviceName = DB::table('services')->where('slug', $p->service_id)->value('name');
+        $isAba = $this->isAba($p, [$p->service_id => $serviceName]);
+        if (!$this->isPsychotherapy($p, [$p->service_id => $serviceName]) && !$isAba) {
             return response()->json(['message' => 'No consent form is required for this service.'], 404);
         }
 
@@ -190,7 +236,7 @@ private function unfinished($q)
             'signed_name'  => $c->signed_name,
             'signed_date'  => $c->signed_date->format('Y-m-d'),
             'is_minor'     => $c->is_minor,
-            'guardian'     => ($c->is_minor || $p->service_id === 'aba')
+            'guardian'     => ($c->is_minor || $isAba)
                 ? ['name' => $c->guardian_name, 'relation' => $c->guardian_relation]
                 : null,
             'intake'                  => $c->intake,

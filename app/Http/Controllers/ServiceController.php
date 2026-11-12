@@ -12,6 +12,14 @@ class ServiceController extends Controller
     // The three canonical service slugs (order matters for display).
     public const SLUGS = ['psychotherapy', 'aba', 'assessment'];
 
+    private function isAssessmentService(object $service): bool
+    {
+        $normalizedName = strtolower(preg_replace('/[^a-z0-9]/i', '', str_replace('&', 'and', $service->name)));
+
+        return ($service->slug ?? null) === 'assessment'
+            || in_array($normalizedName, ['assessmentandconsultation', 'assessmentconsultation'], true);
+    }
+
     // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
@@ -20,6 +28,7 @@ class ServiceController extends Controller
     private function row(object $s, float $price, float $downpayment_percent, float $psychotherapy_downpayment_amount, array $full_only): array
     {
         $slug = $s->slug ?? null;
+        $isAssessment = $this->isAssessmentService($s);
 
         return [
             'id'                  => $slug,
@@ -32,11 +41,11 @@ class ServiceController extends Controller
             'steps'               => $s->steps    ? json_decode($s->steps,    true) : [],
             'image_url'           => $s->image_path ? Storage::disk('public')->url($s->image_path) : null,
             'enabled'             => (bool) $s->enabled,
-            'price'               => $slug === 'assessment' ? 0.0 : $price,
+            'price'               => $isAssessment ? 0.0 : $price,
             'downpayment_percent' => in_array($slug, $full_only) ? 100 : $downpayment_percent,
             'downpayment_amount'  => $slug === 'psychotherapy' ? $psychotherapy_downpayment_amount : null,
             'full_only'           => in_array($slug, $full_only),
-            'is_custom'           => !in_array($slug, self::SLUGS, true),
+            'is_custom'           => !in_array($slug, self::SLUGS, true) && !$isAssessment,
         ];
     }
 
@@ -82,7 +91,7 @@ class ServiceController extends Controller
             $s = $services->firstWhere('slug', $slug);
             if (!$s) continue;
             $row = $this->row($s, (float)($prices[$slug] ?? 0), $downpct, $psychotherapyDownpayment, $full_only);
-            if ($slug === 'assessment') {
+            if ($this->isAssessmentService($s)) {
                 $row['assessment_types'] = $assessmentTypes;
             }
             $rows[] = $row;
@@ -91,7 +100,11 @@ class ServiceController extends Controller
         // Then custom services
         foreach ($services as $s) {
             if (in_array($s->slug, self::SLUGS, true)) continue;
-            $rows[] = $this->row($s, (float)($prices[$s->slug] ?? 0), $downpct, $psychotherapyDownpayment, $full_only);
+            $row = $this->row($s, (float)($prices[$s->slug] ?? 0), $downpct, $psychotherapyDownpayment, $full_only);
+            if ($this->isAssessmentService($s)) {
+                $row['assessment_types'] = $assessmentTypes;
+            }
+            $rows[] = $row;
         }
 
         return $rows;
